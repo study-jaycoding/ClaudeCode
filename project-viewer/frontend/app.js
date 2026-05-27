@@ -12,6 +12,7 @@ const dropOverlay = document.getElementById("drop-overlay");
 const dropTargetEl = document.getElementById("drop-target");
 const favoritesList = document.getElementById("favorites-list");
 const favCountEl = document.getElementById("fav-count");
+const tagFilterBar = document.getElementById("tag-filter-bar");
 const tabBtns = document.querySelectorAll(".tab-btn");
 const tabTree = document.getElementById("tab-tree");
 const tabFavorites = document.getElementById("tab-favorites");
@@ -23,9 +24,11 @@ const lightboxClose = document.querySelector(".lightbox-close");
 // =====================================================================
 // 전역 상태
 // =====================================================================
-let currentProject = "";   // 현재 선택된 프로젝트 이름
-let currentDir = "";       // 현재 미리보기 폴더의 상대경로 ("" = 루트)
-let rootTree = null;       // 마지막 트리 (재렌더링용)
+let currentProject = "";
+let currentDir = "";
+let rootTree = null;
+let favorites = [];          // in-memory cache — 서버에서 로드, 변경마다 POST 동기화
+let activeTagFilter = null;  // null = 전체, string = 해당 태그만
 
 // =====================================================================
 // 헬퍼
@@ -33,11 +36,7 @@ let rootTree = null;       // 마지막 트리 (재렌더링용)
 
 function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({
-        "&": "&amp;",
-        "<": "&lt;",
-        ">": "&gt;",
-        '"': "&quot;",
-        "'": "&#39;",
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
     }[c]));
 }
 
@@ -49,19 +48,14 @@ function humanSize(bytes) {
 }
 
 function kindIcon(kind) {
-    return kind === "image" ? "🖼️"
-         : kind === "video" ? "🎬"
-         : kind === "text"  ? "📄"
-         :                    "📦";
+    return kind === "image" ? "🖼️" : kind === "video" ? "🎬" : kind === "text" ? "📄" : "📦";
 }
 
-/** 트리에서 상대경로로 노드 찾기. */
 function findNodeByPath(tree, path) {
     if (!tree) return null;
     if (path === "" || path == null) return tree;
-    const parts = path.split("/");
     let node = tree;
-    for (const part of parts) {
+    for (const part of path.split("/")) {
         if (!node.children) return null;
         const next = node.children.find((c) => c.name === part);
         if (!next) return null;
@@ -70,129 +64,267 @@ function findNodeByPath(tree, path) {
     return node;
 }
 
-/** 확장자로 kind 를 추정 (favorites 패널에서 트리 노드 정보가 없을 때 사용). */
 function kindFromPath(path) {
     const ext = (path.split(".").pop() || "").toLowerCase();
-    const IMG = ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"];
-    const VID = ["mp4", "webm", "mov", "mkv", "avi", "m4v"];
-    if (IMG.includes(ext)) return "image";
-    if (VID.includes(ext)) return "video";
+    if (["png","jpg","jpeg","gif","webp","svg","bmp","ico"].includes(ext)) return "image";
+    if (["mp4","webm","mov","mkv","avi","m4v"].includes(ext)) return "video";
     return "other";
 }
 
-/** querySelector 안전 이스케이프 */
 function cssQueryEscape(s) {
     return String(s).replace(/(["\\])/g, "\\$1");
 }
 
-// =====================================================================
-// 즐겨찾기 (localStorage 기반)
-// =====================================================================
-const FAV_KEY = "viewer.favorites";
-
-function loadFavorites() {
-    try {
-        return JSON.parse(localStorage.getItem(FAV_KEY) || "[]");
-    } catch {
-        return [];
-    }
+function generateId() {
+    return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
-function saveFavorites(favs) {
-    localStorage.setItem(FAV_KEY, JSON.stringify(favs));
+// =====================================================================
+// 즐겨찾기 — 서버 저장 + in-memory cache
+// =====================================================================
+
+async function initFavorites() {
+    try {
+        const res = await fetch("/api/favorites");
+        const data = await res.json();
+        favorites = Array.isArray(data.favorites) ? data.favorites
+                  : Array.isArray(data) ? data : [];
+        // 기존 데이터에 id 없으면 보충
+        for (const f of favorites) {
+            if (!f.id) f.id = generateId();
+            if (!f.tags) f.tags = [];
+            if (!f.note) f.note = "";
+        }
+    } catch {
+        favorites = [];
+    }
+    updateFavCount();
+}
+
+function persistFavorites() {
     fetch("/api/favorites", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(favs),
+        body: JSON.stringify(favorites),
     }).catch(() => {});
 }
 
 function isFavorite(project, path) {
-    return loadFavorites().some((f) => f.project === project && f.path === path);
+    return favorites.some((f) => f.project === project && f.path === path);
 }
 
-/** 토글. 반환값: 새로 추가했으면 true, 해제했으면 false. */
+function getFavorite(project, path) {
+    return favorites.find((f) => f.project === project && f.path === path);
+}
+
 function toggleFavorite(project, path) {
-    const favs = loadFavorites();
-    const idx = favs.findIndex((f) => f.project === project && f.path === path);
+    const idx = favorites.findIndex((f) => f.project === project && f.path === path);
     if (idx >= 0) {
-        favs.splice(idx, 1);
+        favorites.splice(idx, 1);
     } else {
-        favs.push({ project, path, addedAt: Date.now() });
+        favorites.push({
+            id: generateId(),
+            project,
+            path,
+            tags: [],
+            note: "",
+            addedAt: Date.now(),
+        });
     }
-    saveFavorites(favs);
+    persistFavorites();
     updateFavCount();
     renderFavorites();
     return idx < 0;
 }
 
 function updateFavCount() {
-    favCountEl.textContent = String(loadFavorites().length);
+    favCountEl.textContent = String(favorites.length);
 }
 
+// --- 태그 관리 ---
+
+function addTag(favId, tag) {
+    const fav = favorites.find((f) => f.id === favId);
+    if (!fav) return;
+    tag = tag.trim();
+    if (!tag || fav.tags.includes(tag)) return;
+    fav.tags.push(tag);
+    persistFavorites();
+    renderFavorites();
+    updateStarsInGrid();
+}
+
+function removeTag(favId, tag) {
+    const fav = favorites.find((f) => f.id === favId);
+    if (!fav) return;
+    fav.tags = fav.tags.filter((t) => t !== tag);
+    persistFavorites();
+    renderFavorites();
+}
+
+function getAllTags() {
+    const set = new Set();
+    favorites.forEach((f) => (f.tags || []).forEach((t) => set.add(t)));
+    return [...set].sort();
+}
+
+// --- 태그 필터 바 ---
+
+function renderTagFilterBar() {
+    const tags = getAllTags();
+    tagFilterBar.innerHTML = "";
+    if (tags.length === 0 && favorites.length === 0) return;
+
+    const allChip = document.createElement("button");
+    allChip.type = "button";
+    allChip.className = "tag-chip" + (activeTagFilter === null ? " active" : "");
+    allChip.textContent = `전체 (${favorites.length})`;
+    allChip.addEventListener("click", () => {
+        activeTagFilter = null;
+        renderTagFilterBar();
+        renderFavoritesItems();
+    });
+    tagFilterBar.appendChild(allChip);
+
+    tags.forEach((tag) => {
+        const count = favorites.filter((f) => (f.tags || []).includes(tag)).length;
+        const chip = document.createElement("button");
+        chip.type = "button";
+        chip.className = "tag-chip" + (activeTagFilter === tag ? " active" : "");
+        chip.textContent = `#${tag} (${count})`;
+        chip.addEventListener("click", () => {
+            activeTagFilter = activeTagFilter === tag ? null : tag;
+            renderTagFilterBar();
+            renderFavoritesItems();
+        });
+        tagFilterBar.appendChild(chip);
+    });
+}
+
+// --- 즐겨찾기 목록 렌더 ---
+
 function renderFavorites() {
-    const favs = loadFavorites();
-    if (favs.length === 0) {
-        favoritesList.innerHTML = `<li class="empty">즐겨찾기가 비어 있습니다</li>`;
+    renderTagFilterBar();
+    renderFavoritesItems();
+}
+
+function renderFavoritesItems() {
+    let filtered = [...favorites];
+    if (activeTagFilter) {
+        filtered = filtered.filter((f) => (f.tags || []).includes(activeTagFilter));
+    }
+    filtered.sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
+
+    if (filtered.length === 0) {
+        favoritesList.innerHTML = `<li class="empty">${
+            activeTagFilter
+                ? `"#${escapeHtml(activeTagFilter)}" 태그가 없습니다`
+                : "즐겨찾기가 비어 있습니다"
+        }</li>`;
         return;
     }
-    // 최신순으로 정렬
-    const sorted = [...favs].sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
+
     favoritesList.innerHTML = "";
-    for (const fav of sorted) {
-        const kind = kindFromPath(fav.path);
-        const url = `/media?project=${encodeURIComponent(fav.project)}&path=${encodeURIComponent(fav.path)}`;
-        const li = document.createElement("li");
-        li.className = "fav-item";
+    for (const fav of filtered) {
+        favoritesList.appendChild(renderFavItem(fav));
+    }
+}
 
-        let thumbHtml;
-        if (kind === "image") {
-            thumbHtml = `<img src="${url}" loading="lazy" alt="" />`;
-        } else if (kind === "video") {
-            thumbHtml = `<video src="${url}" preload="metadata" muted></video>`;
-        } else {
-            thumbHtml = `<span>📄</span>`;
-        }
+function renderFavItem(fav) {
+    const kind = kindFromPath(fav.path);
+    const url = `/media?project=${encodeURIComponent(fav.project)}&path=${encodeURIComponent(fav.path)}`;
+    const li = document.createElement("li");
+    li.className = "fav-item";
 
-        li.innerHTML = `
-            <div class="fav-thumb ${kind === "image" || kind === "video" ? "" : "fav-thumb-other"}">${thumbHtml}</div>
+    let thumbHtml;
+    if (kind === "image") {
+        thumbHtml = `<img src="${url}" loading="lazy" alt="" />`;
+    } else if (kind === "video") {
+        thumbHtml = `<video src="${url}" preload="metadata" muted></video>`;
+    } else {
+        thumbHtml = `<span>📄</span>`;
+    }
+
+    // 태그 칩 HTML
+    const tagsHtml = (fav.tags || [])
+        .map((t) => `<span class="tag-chip small" data-tag="${escapeHtml(t)}">#${escapeHtml(t)} <span class="tag-x">✕</span></span>`)
+        .join("");
+
+    li.innerHTML = `
+        <div class="fav-thumb ${kind !== "image" && kind !== "video" ? "fav-thumb-other" : ""}">${thumbHtml}</div>
+        <div class="fav-body">
             <div class="fav-info">
                 <div class="fav-project">${escapeHtml(fav.project)}</div>
                 <div class="fav-path">${escapeHtml(fav.path)}</div>
+                <div class="fav-id">ID: ${escapeHtml(fav.id)}</div>
             </div>
-            <button class="fav-remove" type="button" title="즐겨찾기 해제">⭐</button>`;
+            <div class="fav-tags">
+                ${tagsHtml}
+                <button class="tag-add-btn" type="button" title="태그 추가">+</button>
+            </div>
+        </div>
+        <button class="fav-remove" type="button" title="즐겨찾기 해제">⭐</button>`;
 
-        // 항목 클릭 → 라이트박스 (이미지/영상) 또는 단일 미리보기 (텍스트)
-        li.addEventListener("click", () => {
-            const node = { name: fav.path.split("/").pop(), path: fav.path, kind, size: 0 };
-            if (kind === "image" || kind === "video") {
-                openLightbox(fav.project, node);
-            } else {
-                // 텍스트나 미지원: 해당 프로젝트로 이동 후 미리보기
-                if (currentProject !== fav.project) {
-                    projectSelect.value = fav.project;
-                    loadTree(fav.project).then(() => {
-                        const tn = findNodeByPath(rootTree, fav.path);
-                        if (tn) preview(fav.project, tn);
-                    });
-                } else if (rootTree) {
-                    const tn = findNodeByPath(rootTree, fav.path);
-                    if (tn) preview(fav.project, tn);
-                }
-            }
-        });
+    // 썸네일 클릭 → 라이트박스
+    li.querySelector(".fav-thumb").addEventListener("click", () => {
+        const node = { name: fav.path.split("/").pop(), path: fav.path, kind, size: 0 };
+        if (kind === "image" || kind === "video") {
+            openLightbox(fav.project, node);
+        } else if (rootTree && currentProject === fav.project) {
+            const tn = findNodeByPath(rootTree, fav.path);
+            if (tn) preview(fav.project, tn);
+        }
+    });
 
-        // 별 해제 (이벤트 버블 방지)
-        li.querySelector(".fav-remove").addEventListener("click", (e) => {
+    // 태그 칩 ✕ 클릭
+    li.querySelectorAll(".tag-chip.small").forEach((chip) => {
+        chip.querySelector(".tag-x").addEventListener("click", (e) => {
             e.stopPropagation();
-            toggleFavorite(fav.project, fav.path);
+            removeTag(fav.id, chip.dataset.tag);
         });
+    });
 
-        favoritesList.appendChild(li);
-    }
+    // + 버튼 → 인라인 input
+    li.querySelector(".tag-add-btn").addEventListener("click", (e) => {
+        e.stopPropagation();
+        const tagsDiv = li.querySelector(".fav-tags");
+        const btn = li.querySelector(".tag-add-btn");
+        // 이미 input 있으면 focus
+        if (tagsDiv.querySelector(".tag-input")) {
+            tagsDiv.querySelector(".tag-input").focus();
+            return;
+        }
+        const input = document.createElement("input");
+        input.type = "text";
+        input.className = "tag-input";
+        input.placeholder = "태그 입력";
+        input.maxLength = 20;
+        tagsDiv.insertBefore(input, btn);
+        input.focus();
+
+        const commitTag = () => {
+            const val = input.value.trim();
+            if (val) addTag(fav.id, val);
+            else { input.remove(); }
+        };
+        input.addEventListener("keydown", (ev) => {
+            if (ev.key === "Enter") { ev.preventDefault(); commitTag(); }
+            if (ev.key === "Escape") input.remove();
+        });
+        input.addEventListener("blur", commitTag);
+    });
+
+    // ⭐ 해제
+    li.querySelector(".fav-remove").addEventListener("click", (e) => {
+        e.stopPropagation();
+        toggleFavorite(fav.project, fav.path);
+        updateStarsInGrid();
+    });
+
+    return li;
 }
 
-/** 현재 표시중인 grid 카드들의 별 활성 상태를 다시 계산. */
+/** grid 카드의 별 활성 상태를 동기화. */
 function updateStarsInGrid() {
     document.querySelectorAll(".card .star-btn[data-path]").forEach((btn) => {
         const path = btn.dataset.path;
@@ -293,7 +425,6 @@ function renderNode(node, project) {
 
     if (node.type === "dir") {
         li.className = "dir";
-
         const row = document.createElement("div");
         row.className = "dir-row";
 
@@ -345,13 +476,12 @@ function renderNode(node, project) {
 }
 
 function setActiveLabel(label) {
-    document.querySelectorAll(".tree .active")
-        .forEach((el) => el.classList.remove("active"));
+    document.querySelectorAll(".tree .active").forEach((el) => el.classList.remove("active"));
     label.classList.add("active");
 }
 
 // =====================================================================
-// 폴더 그리드 미리보기
+// 폴더 그리드
 // =====================================================================
 
 function showFolderGrid(project, node) {
@@ -372,12 +502,9 @@ function showFolderGrid(project, node) {
     node.children.forEach((child) => {
         const card = renderGridCard(project, child);
 
-        // 클릭: 카드 선택 (즉시 반응)
         card.addEventListener("click", (e) => {
-            // 별 버튼 클릭은 별도 처리
             if (e.target.closest(".star-btn")) return;
             selectCard(card);
-            // 트리에서도 활성화
             const cls = child.type === "dir" ? "dir-label" : "file-label";
             const treeLabel = document.querySelector(
                 `.tree .${cls}[data-path="${cssQueryEscape(child.path)}"]`
@@ -385,7 +512,6 @@ function showFolderGrid(project, node) {
             if (treeLabel) setActiveLabel(treeLabel);
         });
 
-        // 더블클릭: 폴더는 들어가기 / 이미지·영상은 라이트박스 / 텍스트·기타는 미리보기 영역
         card.addEventListener("dblclick", (e) => {
             if (e.target.closest(".star-btn")) return;
             if (child.type === "dir") {
@@ -441,10 +567,7 @@ function renderGridCard(project, child) {
         thumbInner = `<div class="thumb-icon">📦</div>`;
     }
 
-    // 별 버튼은 이미지/영상에만 노출 (텍스트도 즐겨찾기 가능하게 둘 수 있지만
-    // 사용자 요청 흐름이 이미지 위주이므로 모든 파일에 노출하는 것으로 통일)
     const isFav = isFavorite(project, child.path);
-
     card.innerHTML = `
         <div class="thumb thumb-${child.kind}">
             ${thumbInner}
@@ -455,21 +578,19 @@ function renderGridCard(project, child) {
         <div class="card-name">${escapeHtml(child.name)}</div>
         <div class="card-meta">${humanSize(child.size)}</div>`;
 
-    // 별 버튼 클릭 (카드 클릭 이벤트 전파 차단)
     const star = card.querySelector(".star-btn");
     star.addEventListener("click", (e) => {
         e.stopPropagation();
         toggleFavorite(project, child.path);
         updateStarsInGrid();
     });
-    // 별 더블클릭이 카드 더블클릭으로 번지지 않게
     star.addEventListener("dblclick", (e) => e.stopPropagation());
 
     return card;
 }
 
 // =====================================================================
-// 파일 단일 미리보기 (미리보기 영역에 인라인 표시)
+// 파일 단일 미리보기
 // =====================================================================
 
 function clearPreview() {
@@ -500,8 +621,7 @@ async function preview(project, node) {
                 return;
             }
             const note = data.truncated
-                ? `<p class="warn">⚠ 파일이 너무 커서 처음 1MB 만 표시합니다 (전체 ${humanSize(data.size)})</p>`
-                : "";
+                ? `<p class="warn">⚠ 처음 1MB 만 표시합니다 (전체 ${humanSize(data.size)})</p>` : "";
             previewContent.innerHTML = note + `<pre class="text">${escapeHtml(data.content)}</pre>`;
         } catch (err) {
             previewContent.innerHTML = `<pre class="error">${escapeHtml(err.message)}</pre>`;
@@ -516,7 +636,7 @@ async function preview(project, node) {
 }
 
 // =====================================================================
-// 라이트박스 (이미지/영상 확대)
+// 라이트박스
 // =====================================================================
 
 function openLightbox(project, node) {
@@ -535,22 +655,14 @@ function openLightbox(project, node) {
 }
 
 function closeLightbox() {
-    // video element 를 비워 자동 정지
     lightboxStage.innerHTML = "";
     lightbox.classList.add("hidden");
 }
 
 lightboxClose.addEventListener("click", closeLightbox);
-
-// 배경(stage 바깥) 클릭 시 닫기
-lightbox.addEventListener("click", (e) => {
-    if (e.target === lightbox) closeLightbox();
-});
-
+lightbox.addEventListener("click", (e) => { if (e.target === lightbox) closeLightbox(); });
 document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !lightbox.classList.contains("hidden")) {
-        closeLightbox();
-    }
+    if (e.key === "Escape" && !lightbox.classList.contains("hidden")) closeLightbox();
 });
 
 // =====================================================================
@@ -580,33 +692,23 @@ document.addEventListener("dragenter", (e) => {
     setDropTargetLabel();
     dropOverlay.classList.remove("hidden");
 });
-
 document.addEventListener("dragover", (e) => {
     if (!hasFiles(e)) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = currentProject ? "copy" : "none";
 });
-
 document.addEventListener("dragleave", (e) => {
     if (!hasFiles(e)) return;
     e.preventDefault();
     dragDepth -= 1;
-    if (dragDepth <= 0) {
-        dragDepth = 0;
-        dropOverlay.classList.add("hidden");
-    }
+    if (dragDepth <= 0) { dragDepth = 0; dropOverlay.classList.add("hidden"); }
 });
-
 document.addEventListener("drop", async (e) => {
     if (!hasFiles(e)) return;
     e.preventDefault();
     dragDepth = 0;
     dropOverlay.classList.add("hidden");
-
-    if (!currentProject) {
-        alert("프로젝트를 먼저 선택하세요.");
-        return;
-    }
+    if (!currentProject) { alert("프로젝트를 먼저 선택하세요."); return; }
     const files = Array.from(e.dataTransfer.files);
     if (files.length === 0) return;
     await uploadFiles(currentProject, currentDir, files);
@@ -614,9 +716,7 @@ document.addEventListener("drop", async (e) => {
 
 async function uploadFiles(project, dir, files) {
     const total = files.length;
-    let done = 0;
-    let fails = 0;
-    const errors = [];
+    let done = 0, fails = 0;
     for (const file of files) {
         done += 1;
         previewInfo.textContent = `업로드 중 ${done}/${total}: ${file.name} (${humanSize(file.size)})...`;
@@ -630,24 +730,14 @@ async function uploadFiles(project, dir, files) {
                 },
                 body: file,
             });
-            if (!res.ok) {
-                const data = await res.json().catch(() => ({}));
-                fails += 1;
-                errors.push(`${file.name}: ${data.error || res.status}`);
-            }
-        } catch (err) {
-            fails += 1;
-            errors.push(`${file.name}: ${err.message}`);
-        }
+            if (!res.ok) fails += 1;
+        } catch { fails += 1; }
     }
     const stayDir = currentDir;
     await reloadTreeAndShow(project, stayDir);
-    if (fails > 0) {
-        previewInfo.textContent = `업로드 완료: ${total - fails}/${total} 성공, ${fails} 실패`;
-        console.warn("업로드 실패:", errors);
-    } else {
-        previewInfo.textContent = `📁 ${stayDir || "(루트)"} · 업로드 ${total}개 완료`;
-    }
+    previewInfo.textContent = fails > 0
+        ? `업로드: ${total - fails}/${total} 성공, ${fails} 실패`
+        : `📁 ${stayDir || "(루트)"} · 업로드 ${total}개 완료`;
 }
 
 async function reloadTreeAndShow(project, showDir) {
@@ -660,9 +750,7 @@ async function reloadTreeAndShow(project, showDir) {
         const node = findNodeByPath(rootTree, showDir) || rootTree;
         currentDir = node.path;
         showFolderGrid(project, node);
-    } catch (err) {
-        console.error(err);
-    }
+    } catch (err) { console.error(err); }
 }
 
 // =====================================================================
@@ -680,18 +768,5 @@ refreshBtn.addEventListener("click", async () => {
     }
 });
 
-updateFavCount();
-renderFavorites();
-loadProjects();
-
-// 기존 localStorage 즐겨찾기를 서버에 동기화
-(function syncInitialFavorites() {
-    const favs = loadFavorites();
-    if (favs.length > 0) {
-        fetch("/api/favorites", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(favs),
-        }).catch(() => {});
-    }
-})();
+// 서버에서 즐겨찾기 로드 후 프로젝트 목록 로드
+initFavorites().then(() => loadProjects());

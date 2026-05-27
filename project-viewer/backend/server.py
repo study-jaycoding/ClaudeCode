@@ -28,6 +28,7 @@ FRONTEND_DIR = ROOT_DIR / "frontend"
 # project-manager 와 동일한 projects 폴더 (git repo 바깥) 를 본다.
 PROJECTS_DIR = Path("D:/ClaudeCode-data/projects")
 FAVORITES_FILE = Path("D:/ClaudeCode-data/favorites.json")
+FAVORITES_FILE = Path("D:/ClaudeCode-data/favorites.json")
 
 # 확장자 기반 파일 분류
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico"}

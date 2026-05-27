@@ -15,11 +15,7 @@ project-manager/
 ├── start.bat            # Windows 더블클릭 실행 스크립트
 └── README.md
 
-<<<<<<< Updated upstream
-../projects/             # 생성된 프로젝트가 들어가는 곳
-=======
 D:\ClaudeCode-data\projects\   # 생성된 프로젝트가 들어가는 곳 (git repo 바깥)
->>>>>>> Stashed changes
 ```
 
 ## 실행 방법
@@ -42,11 +38,7 @@ python server.py
 ## 사용법
 
 1. 입력창에 프로젝트 이름 입력 → "생성" 버튼 클릭
-<<<<<<< Updated upstream
-2. `d:\ClaudeCode\projects\<이름>\` 폴더가 생기고 기본 `README.md` 가 함께 만들어진다
-=======
 2. `D:\ClaudeCode-data\projects\<이름>\` 폴더가 생기고 기본 `README.md` 가 함께 만들어진다
->>>>>>> Stashed changes
 3. "프로젝트 목록" 섹션에서 생성된 프로젝트가 보임
 
 ## 이름 규칙

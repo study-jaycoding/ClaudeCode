@@ -264,9 +264,10 @@ button.secondary:hover { background: #424a5c; }
     padding: 8px;
     border-radius: 6px;
     cursor: pointer;
-    align-items: center;
+    align-items: flex-start;
     transition: background 0.15s;
     border: 1px solid transparent;
+    margin-bottom: 4px;
 }
 
 .fav-item:hover {
@@ -299,15 +300,17 @@ button.secondary:hover { background: #424a5c; }
     color: #2d3a55;
 }
 
-.fav-info {
+.fav-body {
     flex: 1;
     min-width: 0;
 }
 
+.fav-info { margin-bottom: 4px; }
+
 .fav-project {
     font-size: 11px;
     color: #7a8194;
-    margin-bottom: 2px;
+    margin-bottom: 1px;
 }
 
 .fav-path {
@@ -322,17 +325,124 @@ button.secondary:hover { background: #424a5c; }
     overflow: hidden;
 }
 
+.fav-id {
+    font-size: 10px;
+    color: #9aa1b3;
+    font-family: "Consolas", "D2Coding", monospace;
+    margin-top: 1px;
+}
+
 .fav-remove {
     background: transparent;
     color: #f0b400;
     font-size: 16px;
     padding: 2px 6px;
     flex-shrink: 0;
+    margin-top: 4px;
 }
 
 .fav-remove:hover {
     background: #fff4d6;
     color: #ad6800;
+}
+
+/* --- 태그 필터 바 --- */
+.tag-filter-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 0 4px 8px;
+    border-bottom: 1px solid #eef2fa;
+    margin-bottom: 8px;
+}
+
+.tag-filter-bar:empty {
+    display: none;
+}
+
+/* --- 태그 칩 (공용) --- */
+.tag-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 3px 8px;
+    border-radius: 12px;
+    font-size: 11.5px;
+    font-weight: 500;
+    background: #eef2fa;
+    color: #2d3a55;
+    border: 1px solid #d3dcef;
+    cursor: pointer;
+    transition: background 0.12s, border-color 0.12s;
+    white-space: nowrap;
+}
+
+.tag-chip:hover {
+    background: #d3e0ff;
+    border-color: #b9c5e8;
+}
+
+.tag-chip.active {
+    background: #4a7bff;
+    color: #fff;
+    border-color: #3666e8;
+}
+
+/* 작은 태그 (fav-item 안) */
+.tag-chip.small {
+    font-size: 10.5px;
+    padding: 2px 6px;
+}
+
+.tag-chip .tag-x {
+    font-size: 10px;
+    opacity: 0.6;
+    cursor: pointer;
+    margin-left: 1px;
+}
+
+.tag-chip .tag-x:hover {
+    opacity: 1;
+}
+
+/* --- 태그 추가 --- */
+.fav-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 3px;
+    align-items: center;
+    margin-top: 3px;
+}
+
+.tag-add-btn {
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border-radius: 50%;
+    background: #eef2fa;
+    color: #5a6478;
+    font-size: 13px;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px dashed #cdd3df;
+}
+
+.tag-add-btn:hover {
+    background: #d3e0ff;
+    color: #2d3a55;
+    border-style: solid;
+}
+
+.tag-input {
+    width: 80px;
+    padding: 2px 6px;
+    border: 1px solid #4a7bff;
+    border-radius: 10px;
+    font-size: 11px;
+    outline: none;
+    background: #fff;
 }
 
 /* ===========================================================

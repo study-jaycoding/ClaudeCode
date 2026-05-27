@@ -5,7 +5,7 @@
 - Python 표준 라이브러리만 사용 (http.server, json, pathlib).
 - 같은 origin 에서 프론트엔드 정적 파일과 API 를 모두 서빙한다.
 - 기본 포트: 8765.
-- 새 프로젝트는 ROOT/../projects/<이름>/ 에 생성되고 기본 README.md 가 함께 만들어진다.
+- 새 프로젝트는 D:/ClaudeCode-data/projects/<이름>/ 에 생성되고 기본 README.md 가 함께 만들어진다.
 """
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -19,14 +19,9 @@ from urllib.parse import urlparse
 BACKEND_DIR = Path(__file__).resolve().parent
 ROOT_DIR = BACKEND_DIR.parent  # d:\ClaudeCode\project-manager
 FRONTEND_DIR = ROOT_DIR / "frontend"
-<<<<<<< Updated upstream
-# 실제 프로젝트들이 생성되는 위치 (project-manager 와 동급)
-PROJECTS_DIR = ROOT_DIR.parent / "projects"
-=======
 # 실제 프로젝트들이 생성되는 위치.
 # git repo (d:\ClaudeCode) 바깥에 두어 작업 결과물이 커밋 대상에 섞이지 않게 한다.
 PROJECTS_DIR = Path("D:/ClaudeCode-data/projects")
->>>>>>> Stashed changes
 
 # 프로젝트 이름 검증 정규식: 한글/영문/숫자/공백/하이픈/언더스코어, 1~50자
 NAME_PATTERN = re.compile(r"^[\w\sㄱ-ㅎㅏ-ㅣ가-힣\-]{1,50}$", re.UNICODE)
@@ -99,11 +94,6 @@ def create_project(name: str) -> tuple[int, dict]:
     return 201, {"name": name, "created": created_at, "path": str(target)}
 
 
-<<<<<<< Updated upstream
-class Handler(BaseHTTPRequestHandler):
-    """단일 HTTP 요청을 처리하는 핸들러."""
-
-=======
 PORT = 8765
 
 ALLOWED_ORIGINS = {
@@ -132,7 +122,6 @@ class Handler(BaseHTTPRequestHandler):
             return False
         return True
 
->>>>>>> Stashed changes
     def _send_json(self, status: int, body: dict) -> None:
         """JSON 응답을 보낸다."""
         data = json.dumps(body, ensure_ascii=False).encode("utf-8")
@@ -180,13 +169,10 @@ class Handler(BaseHTTPRequestHandler):
         self._send_file(candidate)
 
     def do_POST(self) -> None:
-<<<<<<< Updated upstream
-=======
         if not self._check_same_origin():
             self._send_json(403, {"error": "허용되지 않은 요청입니다."})
             return
 
->>>>>>> Stashed changes
         parsed = urlparse(self.path)
         if parsed.path != "/api/projects":
             self.send_error(404, "Not Found")
@@ -211,18 +197,10 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> None:
     """서버 부트스트랩."""
     ensure_projects_dir()
-<<<<<<< Updated upstream
-    port = 8765
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    print("=" * 60)
-    print("프로젝트 매니저 서버 시작")
-    print(f"  주소           : http://127.0.0.1:{port}")
-=======
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     print("=" * 60)
     print("프로젝트 매니저 서버 시작")
     print(f"  주소           : http://127.0.0.1:{PORT}")
->>>>>>> Stashed changes
     print(f"  프로젝트 폴더  : {PROJECTS_DIR}")
     print(f"  프론트엔드 폴더: {FRONTEND_DIR}")
     print("=" * 60)
