@@ -1,0 +1,154 @@
+/* 기본 리셋 */
+* {
+    box-sizing: border-box;
+}
+
+body {
+    font-family: "Segoe UI", "맑은 고딕", "Apple SD Gothic Neo", sans-serif;
+    background: #f4f6fa;
+    margin: 0;
+    padding: 0;
+    color: #222;
+}
+
+main {
+    max-width: 720px;
+    margin: 40px auto;
+    padding: 0 20px;
+}
+
+h1 {
+    margin: 0 0 24px;
+    color: #2d3a55;
+    font-size: 28px;
+}
+
+/* 카드형 섹션 */
+.card {
+    background: #fff;
+    border-radius: 10px;
+    padding: 24px;
+    margin-bottom: 20px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+}
+
+h2 {
+    margin: 0 0 16px;
+    font-size: 18px;
+    color: #2d3a55;
+}
+
+/* 입력 폼 */
+form {
+    display: flex;
+    gap: 8px;
+}
+
+input[type="text"] {
+    flex: 1;
+    padding: 10px 12px;
+    border: 1px solid #d0d6e0;
+    border-radius: 6px;
+    font-size: 14px;
+    transition: border-color 0.15s;
+}
+
+input[type="text"]:focus {
+    outline: none;
+    border-color: #4a7bff;
+}
+
+/* 버튼 */
+button {
+    padding: 10px 18px;
+    background: #4a7bff;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+button:hover {
+    background: #3666e8;
+}
+
+button.secondary {
+    background: #5a6478;
+}
+
+button.secondary:hover {
+    background: #424a5c;
+}
+
+/* 메시지 영역 */
+.message {
+    margin: 12px 0 0;
+    min-height: 20px;
+    font-size: 14px;
+}
+
+.message.success {
+    color: #1f9a5c;
+}
+
+.message.error {
+    color: #d9395f;
+}
+
+.hint {
+    font-size: 12px;
+    color: #8a93a6;
+    margin: 8px 0 0;
+}
+
+/* 목록 헤더 */
+.list-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.list-header h2 {
+    margin: 0;
+}
+
+/* 프로젝트 목록 */
+.project-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.project-list li {
+    padding: 12px 14px;
+    border: 1px solid #e3e7ef;
+    border-radius: 6px;
+    margin-bottom: 8px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    transition: background 0.15s;
+}
+
+.project-list li:hover:not(.empty) {
+    background: #f8faff;
+}
+
+.project-list li.empty {
+    color: #888;
+    justify-content: center;
+    font-style: italic;
+}
+
+.project-name {
+    font-weight: 600;
+    color: #2d3a55;
+}
+
+.project-created {
+    font-size: 12px;
+    color: #7a8194;
+}
