@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Higgsfield Spotlight</title>
+    <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+    <!-- Spotlight overlay -->
+    <div class="spotlight" id="spotlight">
+        <div class="backdrop" id="backdrop"></div>
+
+        <div class="spotlight-content">
+            <!-- Main panel -->
+            <div class="panel" id="panel">
+                <!-- Prompt row -->
+                <div class="prompt-row">
+                    <button class="add-btn" type="button" id="add-ref-btn" title="참조 이미지 추가 (@)">+</button>
+                    <div class="ref-chips" id="ref-chips"></div>
+                    <input type="text" id="prompt-input" class="prompt-input"
+                           placeholder="Describe the scene you imagine"
+                           autocomplete="off" spellcheck="false" />
+                </div>
+
+                <!-- Controls row -->
+                <div class="controls-row">
+                    <div class="controls-left">
+                        <!-- Type toggle -->
+                        <div class="type-toggle" id="type-toggle">
+                            <button class="type-btn active" data-type="image" type="button">Image</button>
+                            <button class="type-btn" data-type="video" type="button">Video</button>
+                        </div>
+
+                        <!-- Model selector -->
+                        <button class="chip model-chip" id="model-btn" type="button">
+                            <span class="provider-dot" id="provider-dot"></span>
+                            <span id="model-name">Nano Banana Pro</span>
+                            <span class="chip-caret">&#x203A;</span>
+                        </button>
+
+                        <!-- Aspect ratio -->
+                        <button class="chip" id="ratio-btn" type="button">
+                            <svg class="chip-svg" viewBox="0 0 16 12" width="16" height="12">
+                                <rect x="1" y="1" width="14" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/>
+                            </svg>
+                            <span id="ratio-value">16:9</span>
+                        </button>
+
+                        <!-- Dynamic options (rendered by JS) -->
+                        <div class="dynamic-opts" id="dynamic-opts"></div>
+                    </div>
+
+                    <!-- Generate button -->
+                    <button class="gen-btn" id="gen-btn" type="button">
+                        Generate
+                        <span class="gen-sparkle">&#x2726;</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Dropdowns (positioned absolutely) -->
+            <div class="dropdown hidden" id="model-dropdown"></div>
+            <div class="dropdown hidden" id="ratio-dropdown"></div>
+
+            <!-- @ mention favorites picker -->
+            <div class="fav-picker hidden" id="fav-picker">
+                <div class="fav-list" id="fav-list"></div>
+                <div class="fav-empty hidden" id="fav-empty">즐겨찾기가 없습니다</div>
+            </div>
+
+            <!-- Results area -->
+            <div class="results hidden" id="results">
+                <div class="results-header">
+                    <span id="results-label">Results</span>
+                    <button class="results-close" id="results-close" type="button">&times;</button>
+                </div>
+                <div class="results-grid" id="results-grid"></div>
+            </div>
+
+            <!-- Status bar -->
+            <div class="status-bar" id="status-bar">
+                <span class="status-indicator" id="status-indicator"></span>
+                <span id="status-text">API 미연결</span>
+                <span class="status-sep">&middot;</span>
+                <span id="status-credits"></span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Lightbox -->
+    <div class="lightbox hidden" id="lightbox">
+        <button class="lightbox-close" type="button" id="lightbox-close">&times;</button>
+        <div class="lightbox-body" id="lightbox-body"></div>
+    </div>
+
+    <script src="/app.js"></script>
+</body>
+</html>

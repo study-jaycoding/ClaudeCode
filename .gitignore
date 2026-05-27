@@ -11,6 +11,9 @@ cut/
 sh_run/
 새 폴더/
 
+# --- API 키 ---
+.api_key
+
 # --- 단발성 임시 파일 ---
 v2_raw.png
 statusline_test2.txt
