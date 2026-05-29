@@ -1,0 +1,275 @@
+/* ========================================================
+   Spotlight viewer 통합 오버라이드 — 하단 도킹 + 충돌 해결
+   ======================================================== */
+
+/* viewer 안의 spotlight: 풀스크린 → 하단 도킹 */
+#spotlight.spotlight {
+    position: fixed;
+    inset: auto 0 24px 0;
+    z-index: 50;
+    display: flex;
+    justify-content: center;
+    pointer-events: none;
+    background: transparent;
+    align-items: flex-end;
+}
+
+#spotlight .spotlight-content {
+    pointer-events: auto;
+    margin-top: 0;
+    width: auto;
+    max-width: 1200px;
+    width: calc(100% - 48px);
+}
+
+/* viewer 의 body 가 height: 100% / overflow: hidden 이라
+   spotlight content margin-top 18vh 같은 게 무효화되도록 명시 */
+
+/* spotlight 전용 라이트박스 */
+.sp-lightbox {
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    background: rgba(4, 4, 10, 0.94);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 40px;
+}
+
+.sp-lightbox.hidden { display: none; }
+
+.sp-lightbox-close {
+    position: absolute;
+    top: 16px;
+    right: 20px;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(255, 255, 255, 0.08);
+    color: #9090a8;
+    font-size: 22px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.sp-lightbox-body img,
+.sp-lightbox-body video {
+    max-width: 90vw;
+    max-height: 85vh;
+    border-radius: 8px;
+    box-shadow: 0 16px 60px rgba(0, 0, 0, 0.8);
+}
+
+/* 결과 그리드: spotlight 위쪽 floating */
+#spotlight .results {
+    max-height: 50vh;
+    overflow-y: auto;
+}
+
+/* 상태바 작게 */
+#spotlight .status-bar {
+    background: rgba(20, 20, 30, 0.8);
+    padding: 4px 12px;
+    border-radius: 8px;
+    margin-top: 6px;
+    backdrop-filter: blur(8px);
+    align-self: flex-start;
+}
+
+/* ========================================================
+   Higgsfield 스타일 드롭다운 — 칩 위로 펼쳐지는 세로 리스트
+   (JS에서 fixed position + bottom anchor 로 위치 지정)
+   ======================================================== */
+
+/* 드롭다운 자체: spotlight-content 의 absolute 잔재를 무력화 */
+#model-dropdown,
+#ratio-dropdown,
+#project-dropdown,
+.opt-dropdown {
+    left: auto;
+    right: auto;
+    margin-top: 0;
+    z-index: 60;
+}
+
+/* option-grid 를 세로 리스트로 (Higgsfield: 체크 옆 라벨 한 줄씩) */
+#ratio-dropdown .option-grid,
+.opt-dropdown .option-grid {
+    display: flex;
+    flex-direction: column;
+    flex-wrap: nowrap;
+    gap: 1px;
+    padding: 4px;
+}
+
+#ratio-dropdown .option-pill,
+.opt-dropdown .option-pill {
+    height: 34px;
+    width: 100%;
+    padding: 0 10px 0 34px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-1);
+    justify-content: flex-start;
+    font-size: 13px;
+    position: relative;
+    text-align: left;
+}
+
+#ratio-dropdown .option-pill:hover,
+.opt-dropdown .option-pill:hover {
+    background: var(--chip-hover);
+    border-color: transparent;
+}
+
+#ratio-dropdown .option-pill.selected,
+.opt-dropdown .option-pill.selected {
+    background: transparent;
+    border-color: transparent;
+    color: var(--text-1);
+    font-weight: 500;
+}
+
+/* 왼쪽 체크박스 자리(미선택) */
+#ratio-dropdown .option-pill::before,
+.opt-dropdown .option-pill::before {
+    content: "";
+    position: absolute;
+    left: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    border: 1.5px solid var(--text-3);
+    box-sizing: border-box;
+    transition: border-color 120ms, background 120ms;
+}
+
+#ratio-dropdown .option-pill.selected::before,
+.opt-dropdown .option-pill.selected::before {
+    border-color: var(--accent);
+    background: var(--accent);
+}
+
+/* 선택된 항목 오른쪽 체크 마크 */
+#ratio-dropdown .option-pill.selected::after,
+.opt-dropdown .option-pill.selected::after {
+    content: "✓";
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--accent);
+    font-size: 13px;
+    font-weight: 700;
+}
+
+/* 모델/프로젝트 드롭다운 폭 보정 */
+#model-dropdown {
+    padding: 4px;
+}
+#model-dropdown .dropdown-title {
+    padding: 8px 8px 4px;
+}
+#model-dropdown .dropdown-item,
+#project-dropdown .dropdown-item {
+    padding: 8px 10px;
+}
+
+/* Results 패널 — panel 위에 위치 */
+#spotlight .results {
+    margin-top: 0;
+    margin-bottom: 12px;
+    max-height: 50vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+#spotlight .results .results-grid {
+    overflow-y: auto;
+}
+#spotlight .results.hidden { display: none; }
+
+/* 결과 토글 — 항상 우측 상단에 떠 있는 원형 버튼 */
+.results-toggle {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    height: 48px;
+    margin: 0 0 8px auto;            /* 우측 정렬 */
+    padding: 0;
+    border: 1px solid var(--panel-border);
+    border-radius: 50%;
+    background: var(--panel-bg);
+    color: var(--text-1);
+    font-size: 24px;
+    line-height: 1;
+    cursor: pointer;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+    transition: transform 0.15s, background 0.15s, box-shadow 0.15s;
+}
+.results-toggle:hover {
+    transform: translateY(-2px);
+    background: var(--chip-hover);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.6);
+}
+.results-toggle.hidden { display: none; }
+.results-toggle .rt-icon { display: inline-block; line-height: 1; }
+
+/* 토글 버튼 우상단의 미확인 카운트 뱃지 */
+.results-unseen {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    min-width: 22px;
+    height: 22px;
+    padding: 0 6px;
+    border-radius: 11px;
+    background: #d4ff5e;
+    color: #0a0e1a;
+    font-size: 12px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+.results-unseen.hidden { display: none; }
+
+/* 동시 generate 분리용 batch 래퍼 — 자식들이 results-grid 의 직계 자식처럼
+   배치되도록 display: contents (지원 브라우저: Chrome/Edge/Firefox 모두 OK). */
+.result-batch {
+    display: contents;
+}
+
+/* Generate 버튼 내부 cost 뱃지 */
+.gen-cost {
+    display: inline-block;
+    margin-left: 4px;
+    padding: 1px 6px;
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.25);
+    color: inherit;
+    font-weight: 700;
+    font-size: 12px;
+    vertical-align: middle;
+}
+
+/* 키보드 점프로 활성화된 항목 — selected 와 별개로 강조.
+   모델/프로젝트의 .dropdown-item, ratio/opt 의 .option-pill 모두 적용. */
+#spotlight .dropdown-item.kbd-active,
+#spotlight .option-pill.kbd-active,
+.opt-dropdown .option-pill.kbd-active,
+#project-dropdown .dropdown-item.kbd-active {
+    background: rgba(200, 255, 0, 0.10);
+    outline: 1px solid rgba(200, 255, 0, 0.45);
+    outline-offset: -1px;
+}

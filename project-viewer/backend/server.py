@@ -18,7 +18,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import json
 import mimetypes
+import queue
 import re
+import sys
+import threading
+import time
+
+# Spotlight 통합 모듈
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from spotlight import api as sp_api
 from urllib.parse import urlparse, parse_qs, unquote
 
 # 절대 경로 기준점
@@ -27,7 +35,6 @@ ROOT_DIR = BACKEND_DIR.parent  # d:\ClaudeCode\project-viewer
 FRONTEND_DIR = ROOT_DIR / "frontend"
 # project-manager 와 동일한 projects 폴더 (git repo 바깥) 를 본다.
 PROJECTS_DIR = Path("D:/ClaudeCode-data/projects")
-FAVORITES_FILE = Path("D:/ClaudeCode-data/favorites.json")
 FAVORITES_FILE = Path("D:/ClaudeCode-data/favorites.json")
 
 # 확장자 기반 파일 분류
@@ -66,6 +73,80 @@ ALLOWED_HOSTS = {
 
 # Windows 에서 사용할 수 없는 파일명 문자 + 제어 문자
 INVALID_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+
+# ─────────────────────────────────────────────────────────────────────
+# SSE — favorites.json 변경 시 모든 클라이언트에 즉시 push
+# (spotlight 가 다운로드 후 favorites.json 에 쓰면 viewer 가 자동 갱신)
+# ─────────────────────────────────────────────────────────────────────
+SSE_CLIENTS: list[queue.Queue] = []
+SSE_LOCK = threading.Lock()
+
+
+def _broadcast_event(msg: str) -> None:
+    """모든 SSE 클라이언트 큐에 메시지를 push."""
+    with SSE_LOCK:
+        for q in list(SSE_CLIENTS):
+            try:
+                q.put_nowait(msg)
+            except queue.Full:
+                pass
+
+
+def _favorites_watcher() -> None:
+    """favorites.json 의 mtime 을 1초마다 감시 → 변경 감지 시 SSE broadcast."""
+    last = 0.0
+    try:
+        last = FAVORITES_FILE.stat().st_mtime
+    except OSError:
+        last = 0.0
+    while True:
+        time.sleep(1.0)
+        try:
+            cur = FAVORITES_FILE.stat().st_mtime
+        except OSError:
+            cur = 0.0
+        if cur != last:
+            last = cur
+            _broadcast_event("favorites-changed")
+
+
+import struct
+from datetime import datetime
+
+
+def get_image_dimensions(path: Path) -> tuple[int | None, int | None]:
+    """PNG/JPEG 파일의 해상도를 표준 라이브러리만으로 읽는다."""
+    ext = path.suffix.lower()
+    try:
+        if ext == ".png":
+            with open(path, "rb") as f:
+                header = f.read(24)
+                if len(header) >= 24 and header[:8] == b"\x89PNG\r\n\x1a\n":
+                    w, h = struct.unpack(">II", header[16:24])
+                    return w, h
+        elif ext in (".jpg", ".jpeg"):
+            with open(path, "rb") as f:
+                if f.read(2) != b"\xff\xd8":
+                    return None, None
+                while True:
+                    marker = f.read(2)
+                    if len(marker) < 2 or marker[0] != 0xFF:
+                        break
+                    code = marker[1]
+                    if code in (0xC0, 0xC1, 0xC2):
+                        f.read(3)
+                        h, w = struct.unpack(">HH", f.read(4))
+                        return w, h
+                    elif code == 0xD9:
+                        break
+                    elif code in (0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7, 0xD8, 0x01):
+                        continue
+                    else:
+                        seg_len = struct.unpack(">H", f.read(2))[0]
+                        f.read(seg_len - 2)
+    except Exception:
+        pass
+    return None, None
 
 
 def classify(path: Path) -> str:
@@ -165,6 +246,9 @@ def _fill_tree(directory: Path, parent_node: dict, prefix: str) -> None:
         return
 
     for entry in entries:
+        # 시스템 ledger 파일은 트리에 노출 안 함
+        if entry.is_file() and entry.name == "_generations.json":
+            continue
         rel = f"{prefix}{entry.name}"
         if entry.is_dir():
             child = {"name": entry.name, "type": "dir", "path": rel, "children": []}
@@ -172,15 +256,19 @@ def _fill_tree(directory: Path, parent_node: dict, prefix: str) -> None:
             _fill_tree(entry, child, rel + "/")
         else:
             try:
-                size = entry.stat().st_size
+                st = entry.stat()
+                size = st.st_size
+                mtime = st.st_mtime
             except OSError:
                 size = 0
+                mtime = 0
             parent_node["children"].append({
                 "name": entry.name,
                 "type": "file",
                 "kind": classify(entry),
                 "path": rel,
                 "size": size,
+                "mtime": mtime,
             })
 
 
@@ -197,6 +285,41 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _serve_sse(self) -> None:
+        """SSE 스트림 — favorites.json 변경 등을 client 에 즉시 push.
+        20초 timeout 으로 keep-alive ping; 연결 끊기면 종료."""
+        q: queue.Queue = queue.Queue(maxsize=100)
+        with SSE_LOCK:
+            SSE_CLIENTS.append(q)
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+            # 연결 직후 keep-alive 한 번
+            try:
+                self.wfile.write(b": connected\n\n")
+                self.wfile.flush()
+            except OSError:
+                return
+            while True:
+                try:
+                    msg = q.get(timeout=20)
+                    payload = f"data: {msg}\n\n".encode("utf-8")
+                except queue.Empty:
+                    payload = b": ping\n\n"
+                try:
+                    self.wfile.write(payload)
+                    self.wfile.flush()
+                except OSError:
+                    break  # 클라이언트 끊김
+        finally:
+            with SSE_LOCK:
+                if q in SSE_CLIENTS:
+                    SSE_CLIENTS.remove(q)
+
     def _send_static(self, path: Path) -> None:
         if not path.exists() or not path.is_file():
             self.send_error(404, "Not Found")
@@ -206,6 +329,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", mime)
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         self.end_headers()
         self.wfile.write(data)
 
@@ -293,8 +417,20 @@ class Handler(BaseHTTPRequestHandler):
         path = parsed.path
         params = parse_qs(parsed.query)
 
+        # ── Spotlight 엔드포인트 ─────────────────────────────────────
+        if path == "/api/sp/models":
+            self._send_json(*sp_api.get_models()); return
+        if path == "/api/sp/balance":
+            self._send_json(*sp_api.get_balance()); return
+        if path.startswith("/api/sp/jobs/"):
+            self._send_json(*sp_api.get_job(path[len("/api/sp/jobs/"):])); return
+
         if path == "/api/projects":
             self._send_json(200, {"projects": list_projects()})
+            return
+
+        if path == "/api/events":
+            self._serve_sse()
             return
 
         if path == "/api/favorites":
@@ -306,6 +442,40 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 favs = []
             self._send_json(200, {"favorites": favs})
+            return
+
+        if path == "/api/meta":
+            project = params.get("project", [""])[0]
+            rel = params.get("path", [""])[0]
+            project_dir = safe_project_dir(project)
+            if project_dir is None:
+                self._send_json(404, {"error": "프로젝트를 찾을 수 없습니다."})
+                return
+            target = safe_resolve(project_dir, rel)
+            if target is None or not target.is_file():
+                self._send_json(404, {"error": "파일을 찾을 수 없습니다."})
+                return
+            stat = target.stat()
+            w, h = get_image_dimensions(target)
+            # 생성 메타데이터 — 프로젝트별 누적 ledger 에서 조회.
+            # (기존 *.json sidecar 들은 ledger.get 호출 시 자동 1회 마이그레이션 + 삭제.)
+            try:
+                from spotlight import ledger as sp_ledger
+                sidecar = sp_ledger.get(project_dir, rel)
+            except Exception:
+                sidecar = None
+            self._send_json(200, {
+                "name": target.name,
+                "path": rel,
+                "ext": target.suffix.lower(),
+                "size": stat.st_size,
+                "width": w,
+                "height": h,
+                "kind": classify(target),
+                "ctime": datetime.fromtimestamp(stat.st_ctime).strftime("%Y-%m-%d %H:%M:%S"),
+                "mtime": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
+                "sidecar": sidecar,
+            })
             return
 
         if path == "/api/tree":
@@ -384,6 +554,332 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         params = parse_qs(parsed.query)
+
+        # ── Spotlight 엔드포인트 ─────────────────────────────────────
+        if path in ("/api/sp/login", "/api/sp/generate", "/api/sp/cost", "/api/sp/ref-upload"):
+            if not self._check_same_origin():
+                self._send_json(403, {"error": "허용되지 않은 요청입니다."})
+                return
+            if path == "/api/sp/login":
+                self._send_json(*sp_api.post_login()); return
+            if path == "/api/sp/generate":
+                length = int(self.headers.get("Content-Length", "0"))
+                raw = self.rfile.read(length).decode("utf-8") if length else ""
+                self._send_json(*sp_api.post_generate(raw)); return
+            if path == "/api/sp/cost":
+                length = int(self.headers.get("Content-Length", "0"))
+                raw = self.rfile.read(length).decode("utf-8") if length else ""
+                self._send_json(*sp_api.post_cost(raw)); return
+            if path == "/api/sp/ref-upload":
+                length = int(self.headers.get("Content-Length", "0"))
+                filename = self.headers.get("X-File-Name", "upload.png")
+                body = self.rfile.read(length) if length > 0 else b""
+                self._send_json(*sp_api.post_ref_upload(length, filename, body)); return
+
+        if path == "/api/fetch-url":
+            if not self._check_same_origin():
+                self._send_json(403, {"error": "허용되지 않은 요청입니다."})
+                return
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length).decode("utf-8") if length else "{}"
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError:
+                self._send_json(400, {"error": "잘못된 JSON"})
+                return
+            project = payload.get("project", "")
+            rel_dir = payload.get("dir", "")
+            src_url = payload.get("url", "")
+            filename = payload.get("filename", "")
+            if not src_url or not src_url.lower().startswith(("http://", "https://")):
+                self._send_json(400, {"error": "유효한 URL 이 필요합니다."})
+                return
+            project_dir = safe_project_dir(project)
+            if project_dir is None:
+                self._send_json(404, {"error": "프로젝트를 찾을 수 없습니다."})
+                return
+            target_dir = safe_resolve(project_dir, rel_dir) if rel_dir else project_dir
+            if target_dir is None or not target_dir.is_dir():
+                self._send_json(404, {"error": "대상 폴더를 찾을 수 없습니다."})
+                return
+            if not filename:
+                from urllib.parse import urlparse as _u, unquote as _uq
+                filename = _uq(_u(src_url).path.split("/")[-1]) or "downloaded"
+            if not is_safe_filename(filename):
+                self._send_json(400, {"error": "잘못된 파일 이름입니다."})
+                return
+            import urllib.request
+            try:
+                req = urllib.request.Request(src_url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    if int(resp.headers.get("Content-Length", "0")) > MAX_UPLOAD_BYTES:
+                        self._send_json(413, {"error": "파일이 너무 큽니다."})
+                        return
+                    data = resp.read(MAX_UPLOAD_BYTES + 1)
+                    if len(data) > MAX_UPLOAD_BYTES:
+                        self._send_json(413, {"error": "파일이 너무 큽니다."})
+                        return
+            except Exception as e:
+                self._send_json(502, {"error": f"URL 다운로드 실패: {e}"})
+                return
+            target_path = unique_path(target_dir, filename)
+            target_path.write_bytes(data)
+            new_rel = str(target_path.relative_to(project_dir)).replace("\\", "/")
+            self._send_json(201, {"name": target_path.name, "path": new_rel, "size": len(data)})
+            return
+
+        if path == "/api/delete":
+            if not self._check_same_origin():
+                self._send_json(403, {"error": "허용되지 않은 요청입니다."})
+                return
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length).decode("utf-8") if length else "{}"
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError:
+                self._send_json(400, {"error": "잘못된 JSON"})
+                return
+            project = payload.get("project", "")
+            rel = payload.get("path", "")
+            project_dir = safe_project_dir(project)
+            if project_dir is None:
+                self._send_json(404, {"error": "프로젝트를 찾을 수 없습니다."})
+                return
+            target = safe_resolve(project_dir, rel)
+            if target is None or not target.exists():
+                self._send_json(404, {"error": "파일/폴더를 찾을 수 없습니다."})
+                return
+            was_dir = target.is_dir()
+            try:
+                if was_dir:
+                    import shutil
+                    shutil.rmtree(target)
+                else:
+                    target.unlink()
+            except Exception as e:
+                self._send_json(500, {"error": f"삭제 실패: {e}"})
+                return
+            # ledger 엔트리 정리
+            try:
+                from spotlight import ledger as sp_ledger
+                if was_dir:
+                    sp_ledger.remove_with_prefix(project_dir, rel)
+                else:
+                    sp_ledger.remove(project_dir, rel)
+            except Exception:
+                pass
+            # favorites.json 에서도 해당 항목 제거
+            if FAVORITES_FILE.exists():
+                try:
+                    favs = json.loads(FAVORITES_FILE.read_text(encoding="utf-8"))
+                    old_rel = rel.replace("\\", "/")
+                    favs = [f for f in favs if not (f.get("project") == project and f.get("path") == old_rel)]
+                    FAVORITES_FILE.write_text(
+                        json.dumps(favs, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                except Exception:
+                    pass
+            self._send_json(200, {"deleted": rel})
+            return
+
+        if path == "/api/mkdir":
+            if not self._check_same_origin():
+                self._send_json(403, {"error": "허용되지 않은 요청입니다."})
+                return
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length).decode("utf-8") if length else "{}"
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError:
+                self._send_json(400, {"error": "잘못된 JSON"})
+                return
+            project = payload.get("project", "")
+            parent = payload.get("parent", "")
+            name = (payload.get("name", "") or "").strip()
+            if not name or any(c in name for c in '/\\:*?"<>|'):
+                self._send_json(400, {"error": "잘못된 폴더 이름"})
+                return
+            project_dir = safe_project_dir(project)
+            if project_dir is None:
+                self._send_json(404, {"error": "프로젝트를 찾을 수 없습니다."})
+                return
+            parent_dir = safe_resolve(project_dir, parent) if parent else project_dir
+            if parent_dir is None:
+                self._send_json(404, {"error": "잘못된 부모 경로입니다."})
+                return
+            target = parent_dir / name
+            if target.exists():
+                self._send_json(409, {"error": "이미 존재하는 이름입니다."})
+                return
+            try:
+                # 부모 폴더가 아직 없으면 함께 생성 (예: Result/ 미생성 상태)
+                target.mkdir(parents=True, exist_ok=False)
+            except Exception as e:
+                self._send_json(500, {"error": f"폴더 생성 실패: {e}"})
+                return
+            rel = str(target.relative_to(project_dir)).replace("\\", "/")
+            self._send_json(201, {"path": rel, "name": name})
+            return
+
+        if path == "/api/rename":
+            if not self._check_same_origin():
+                self._send_json(403, {"error": "허용되지 않은 요청입니다."})
+                return
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length).decode("utf-8") if length else "{}"
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError:
+                self._send_json(400, {"error": "잘못된 JSON"})
+                return
+            project = payload.get("project", "")
+            rel = payload.get("path", "")
+            new_name = payload.get("newName", "").strip()
+            project_dir = safe_project_dir(project)
+            if project_dir is None:
+                self._send_json(404, {"error": "프로젝트를 찾을 수 없습니다."})
+                return
+            target = safe_resolve(project_dir, rel)
+            if target is None or not target.exists():
+                self._send_json(404, {"error": "파일/폴더를 찾을 수 없습니다."})
+                return
+            if not is_safe_filename(new_name):
+                self._send_json(400, {"error": "잘못된 이름입니다."})
+                return
+            dst = target.parent / new_name
+            if dst.exists():
+                self._send_json(409, {"error": f"같은 이름이 이미 존재합니다: {new_name}"})
+                return
+            try:
+                target.rename(dst)
+            except Exception as e:
+                self._send_json(500, {"error": f"이름 변경 실패: {e}"})
+                return
+            new_rel = str(dst.relative_to(project_dir)).replace("\\", "/")
+            old_rel = rel.replace("\\", "/")
+            was_dir = dst.is_dir()
+            # ledger 키 동기화 (폴더면 prefix 일괄 치환)
+            try:
+                from spotlight import ledger as sp_ledger
+                sp_ledger.rename(project_dir, old_rel, new_rel, is_dir=was_dir)
+            except Exception:
+                pass
+            # favorites.json 경로 업데이트 — 파일이면 정확 매치, 폴더면 prefix 치환
+            if FAVORITES_FILE.exists():
+                try:
+                    favs = json.loads(FAVORITES_FILE.read_text(encoding="utf-8"))
+                    for f in favs:
+                        if f.get("project") != project:
+                            continue
+                        p = f.get("path", "")
+                        if was_dir:
+                            if p == old_rel or p.startswith(old_rel + "/"):
+                                f["path"] = new_rel + p[len(old_rel):]
+                        else:
+                            if p == old_rel:
+                                f["path"] = new_rel
+                    FAVORITES_FILE.write_text(
+                        json.dumps(favs, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                except Exception:
+                    pass
+            self._send_json(200, {"name": new_name, "from": rel, "to": new_rel})
+            return
+
+        if path == "/api/reveal":
+            if not self._check_same_origin():
+                self._send_json(403, {"error": "허용되지 않은 요청입니다."})
+                return
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length).decode("utf-8") if length else "{}"
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError:
+                self._send_json(400, {"error": "잘못된 JSON"})
+                return
+            project = payload.get("project", "")
+            rel = payload.get("path", "")
+            project_dir = safe_project_dir(project)
+            if project_dir is None:
+                self._send_json(404, {"error": "프로젝트를 찾을 수 없습니다."})
+                return
+            target = safe_resolve(project_dir, rel)
+            if target is None or not target.exists():
+                self._send_json(404, {"error": "파일을 찾을 수 없습니다."})
+                return
+            import subprocess
+            try:
+                # Windows 탐색기에서 파일이 선택된 상태로 폴더 열기
+                subprocess.Popen(["explorer.exe", f"/select,{str(target)}"])
+            except Exception as e:
+                self._send_json(500, {"error": f"탐색기 열기 실패: {e}"})
+                return
+            self._send_json(200, {"opened": str(target)})
+            return
+
+        if path == "/api/move":
+            if not self._check_same_origin():
+                self._send_json(403, {"error": "허용되지 않은 요청입니다."})
+                return
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length).decode("utf-8") if length else "{}"
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError:
+                self._send_json(400, {"error": "잘못된 JSON"})
+                return
+            project = payload.get("project", "")
+            from_path = payload.get("from", "")
+            to_dir = payload.get("toDir", "")
+            project_dir = safe_project_dir(project)
+            if project_dir is None:
+                self._send_json(404, {"error": "프로젝트를 찾을 수 없습니다."})
+                return
+            src = safe_resolve(project_dir, from_path)
+            if src is None or not src.is_file():
+                self._send_json(404, {"error": "원본 파일을 찾을 수 없습니다."})
+                return
+            dst_dir = safe_resolve(project_dir, to_dir) if to_dir else project_dir
+            if dst_dir is None or not dst_dir.is_dir():
+                self._send_json(404, {"error": "대상 폴더를 찾을 수 없습니다."})
+                return
+            dst = dst_dir / src.name
+            if dst.exists():
+                self._send_json(409, {"error": f"대상에 같은 이름의 파일이 존재합니다: {src.name}"})
+                return
+            try:
+                src.rename(dst)
+            except Exception as e:
+                self._send_json(500, {"error": f"이동 실패: {e}"})
+                return
+            new_rel = str(dst.relative_to(project_dir)).replace("\\", "/")
+            # ledger (생성 메타) 키 동기화
+            try:
+                from spotlight import ledger as sp_ledger
+                sp_ledger.rename(project_dir, from_path, new_rel, is_dir=False)
+            except Exception:
+                pass
+            # favorites.json 에서 경로 자동 업데이트
+            if FAVORITES_FILE.exists():
+                try:
+                    favs = json.loads(FAVORITES_FILE.read_text(encoding="utf-8"))
+                    old_rel = from_path.replace("\\", "/")
+                    changed = False
+                    for f in favs:
+                        if f.get("project") == project and f.get("path") == old_rel:
+                            f["path"] = new_rel
+                            changed = True
+                    if changed:
+                        FAVORITES_FILE.write_text(
+                            json.dumps(favs, ensure_ascii=False, indent=2),
+                            encoding="utf-8",
+                        )
+                except Exception:
+                    pass
+            self._send_json(200, {"name": src.name, "from": from_path, "to": new_rel})
+            return
 
         if path == "/api/favorites":
             if not self._check_same_origin():
@@ -502,6 +998,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
+    # favorites.json mtime watcher — 변경 감지 시 SSE broadcast
+    threading.Thread(target=_favorites_watcher, daemon=True).start()
+
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     print("=" * 60)
     print("프로젝트 뷰어 서버 시작")
@@ -509,6 +1008,7 @@ def main() -> None:
     print(f"  프로젝트 폴더  : {PROJECTS_DIR}")
     print(f"  프론트엔드 폴더: {FRONTEND_DIR}")
     print(f"  최대 업로드    : {MAX_UPLOAD_BYTES // 1024 // 1024}MB")
+    print(f"  SSE 이벤트     : /api/events (favorites watcher 동작 중)")
     print("=" * 60)
     print("종료하려면 Ctrl+C")
     try:

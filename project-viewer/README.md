@@ -1,22 +1,43 @@
-# 프로젝트 뷰어
+# 프로젝트 뷰어 + Higgsfield Spotlight 통합
 
-`project-manager` 가 만든 프로젝트 폴더 안의 **이미지/영상/텍스트** 를 웹 브라우저에서 미리보기할 수 있는 도구. Python 표준 라이브러리만 사용 (외부 패키지 설치 불필요).
+`project-manager` 가 만든 프로젝트 폴더의 **이미지/영상/텍스트** 를 브라우저에서 미리보기하고, 동시에 화면 하단 Spotlight 바에서 **Higgsfield CLI 로 생성** 까지 할 수 있는 통합 도구. 결과는 선택한 프로젝트 폴더에 자동 저장 + favorites 자동 등록.
 
 ## 폴더 구조
 
 ```
 project-viewer/
 ├── backend/
-│   └── server.py        # HTTP 서버 (API + 정적 파일 서빙)
+│   ├── server.py        # HTTP 서버 (viewer + spotlight 라우팅)
+│   └── spotlight/       # Higgsfield CLI 생성 모듈
+│       ├── cli.py            # higgsfield 명령 subprocess
+│       ├── catalog.py        # 27개 모델 카탈로그
+│       ├── generation.py     # 생성 흐름 (병렬, 메타데이터)
+│       ├── projects_ops.py   # 다운로드 + favorites 업데이트
+│       └── api.py            # 엔드포인트 함수
 ├── frontend/
-│   ├── index.html       # 메인 UI (좌측 트리 + 우측 미리보기)
-│   ├── style.css
-│   └── app.js
-├── start.bat            # Windows 더블클릭 실행 스크립트
+│   ├── index.html       # viewer + spotlight 오버레이
+│   ├── style.css        # 합본 스타일
+│   ├── style-spotlight-override.css  # 하단 도킹 + 충돌 회피
+│   └── js/
+│       ├── app.js            # viewer 진입점
+│       ├── (viewer 모듈들)
+│       └── spotlight/        # spotlight 모듈 (ES Modules)
+│           ├── app.js
+│           ├── dom.js, state.js, api.js, ...
+│           └── (총 18개 모듈)
+├── start.bat
 └── README.md
 
-D:\ClaudeCode-data\projects\   # 탐색 대상 (project-manager 와 공유하는 폴더, git repo 바깥)
+D:\ClaudeCode-data\projects\         # 프로젝트 폴더 (git 바깥)
+D:\ClaudeCode-data\favorites.json    # 공유 favorites
 ```
+
+## 사전 요구사항
+
+- Python 3.10+
+- Node.js + `@higgsfield/cli` (`npm install -g @higgsfield/cli`)
+- Higgsfield CLI 로그인 (`higgsfield auth login`, 브라우저 자동 열림)
+  - 미로그인 시 Spotlight 우하단 상태바 클릭으로 트리거 가능
 
 ## 실행 방법
 

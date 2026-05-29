@@ -3,12 +3,13 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>프로젝트 뷰어</title>
+    <title>Millionvolt Ai</title>
     <link rel="stylesheet" href="/style.css" />
+    <link rel="stylesheet" href="/style-spotlight-override.css" />
 </head>
 <body>
     <header>
-        <h1>프로젝트 뷰어</h1>
+        <h1>Millionvolt Ai</h1>
         <div class="toolbar">
             <label for="project-select">프로젝트</label>
             <select id="project-select">
@@ -20,10 +21,11 @@
 
     <main class="layout">
         <aside class="sidebar">
-            <!-- 사이드바 탭: 트리 / 즐겨찾기 -->
+            <!-- 사이드바 탭: 구성 / 소스 / 생성 -->
             <div class="sidebar-tabs">
-                <button class="tab-btn active" type="button" data-tab="tree">📂 트리</button>
-                <button class="tab-btn" type="button" data-tab="favorites">⭐ 즐겨찾기 <span id="fav-count" class="fav-count">0</span></button>
+                <button class="tab-btn active" type="button" data-tab="tree">📂 구성</button>
+                <button class="tab-btn" type="button" data-tab="favorites">🔗 소스 <span id="fav-count" class="fav-count hidden">0</span></button>
+                <button class="tab-btn" type="button" data-tab="generated">✨ 생성 <span id="gen-count" class="fav-count hidden">0</span></button>
             </div>
 
             <div class="tab-panel" id="tab-tree">
@@ -38,10 +40,38 @@
                     <li class="empty">즐겨찾기가 비어 있습니다</li>
                 </ul>
             </div>
+
+            <div class="tab-panel hidden" id="tab-generated">
+                <div class="generated-hint">스포트라이트에서 생성한 결과가<br/><code>Result/</code> 폴더로 자동 저장됩니다.<br/><small>폴더/파일 우클릭으로 새 폴더 생성·삭제</small></div>
+                <ul id="gen-tree" class="tree"></ul>
+            </div>
         </aside>
 
         <section class="preview">
             <div id="preview-info" class="preview-info">프로젝트를 선택하거나 파일을 끌어다 놓으세요</div>
+            <div class="view-controls">
+                <label class="size-control">
+                    <span class="size-label">크기</span>
+                    <input id="card-size-slider" type="range" min="100" max="320" value="160" step="10" />
+                    <span id="card-size-value" class="size-value">160</span>
+                </label>
+                <div class="view-toggle" role="group">
+                    <button class="view-btn active" type="button" data-view="grid" title="카드 보기">⊞ 카드</button>
+                    <button class="view-btn" type="button" data-view="list" title="리스트 보기">☰ 리스트</button>
+                </div>
+                <div class="sort-control">
+                    <span class="size-label">정렬</span>
+                    <select id="sort-select" class="sort-select">
+                        <option value="name">이름</option>
+                        <option value="kind">종류</option>
+                        <option value="size">크기</option>
+                        <option value="mtime">수정일</option>
+                        <option value="addedAt">추가일</option>
+                        <option value="tag">태그</option>
+                    </select>
+                    <button id="sort-dir-btn" class="view-btn sort-dir-btn" type="button" title="오름/내림 차순">↑</button>
+                </div>
+            </div>
             <div id="preview-content" class="preview-content"></div>
         </section>
     </main>
@@ -55,6 +85,20 @@
         </div>
     </div>
 
+    <!-- 드래그 영역 선택 (rubber band) -->
+    <div id="lasso" class="lasso hidden"></div>
+
+    <!-- 우클릭 정보 팝업 -->
+    <div id="context-popup" class="context-popup hidden"></div>
+
+    <!-- 우클릭 메뉴 (트리/그리드 공용) -->
+    <div id="tree-menu" class="tree-menu hidden">
+        <button type="button" data-action="navigate">📂 구성에서 보기</button>
+        <button type="button" data-action="reveal">📁 원본 위치 열기</button>
+        <button type="button" data-action="rename">✎ 이름 변경 (F2)</button>
+        <button type="button" data-action="delete" class="tree-menu-danger">🗑 삭제 (Del)</button>
+    </div>
+
     <!-- 라이트박스 (이미지/영상 확대) -->
     <div id="lightbox" class="lightbox hidden">
         <button class="lightbox-close" type="button" title="닫기 (Esc)">✕</button>
@@ -62,6 +106,96 @@
         <div class="lightbox-caption" id="lightbox-caption"></div>
     </div>
 
-    <script src="/app.js"></script>
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- Spotlight 오버레이 (하단 도킹)                                -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <div class="spotlight" id="spotlight">
+        <div class="spotlight-content">
+            <button class="results-toggle hidden" id="results-toggle" type="button" title="결과">
+                <span class="rt-icon" id="results-toggle-icon">+</span>
+                <span id="results-unseen" class="results-unseen hidden">0</span>
+            </button>
+            <div class="results hidden" id="results">
+                <div class="results-grid" id="results-grid"></div>
+            </div>
+
+            <div class="panel" id="panel">
+                <div class="prompt-row" id="prompt-row">
+                    <button class="add-btn" type="button" id="add-ref-btn" title="참조 이미지 추가 (@)">+</button>
+                    <div id="tag-active-badge" class="tag-active-badge hidden">
+                        <span class="tab-label">#</span>
+                        <span id="tab-name"></span>
+                        <button id="tab-clear" type="button" tabindex="-1" title="태그 해제 (Esc)">&times;</button>
+                    </div>
+                    <div id="prompt-input" class="prompt-input" contenteditable="true"
+                         spellcheck="false" data-placeholder="Describe the scene you imagine"></div>
+                </div>
+                <div class="controls-row">
+                    <div class="controls-left">
+                        <div class="type-toggle" id="type-toggle">
+                            <button class="type-btn active" data-type="image" type="button">Image</button>
+                            <button class="type-btn" data-type="video" type="button">Video</button>
+                        </div>
+                        <button class="chip model-chip" id="model-btn" type="button">
+                            <span class="provider-dot" id="provider-dot"></span>
+                            <span id="model-name">Nano Banana Pro</span>
+                            <span class="chip-caret">&#x203A;</span>
+                        </button>
+                        <button class="chip" id="ratio-btn" type="button">
+                            <svg class="chip-svg" viewBox="0 0 16 12" width="16" height="12">
+                                <rect x="1" y="1" width="14" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/>
+                            </svg>
+                            <span id="ratio-value">16:9</span>
+                        </button>
+                        <div class="dynamic-opts" id="dynamic-opts"></div>
+                        <button class="chip" id="project-btn" type="button" title="결과 저장 프로젝트">
+                            <span class="chip-svg" style="font-size:13px">📁</span>
+                            <span id="project-value">(프로젝트 선택)</span>
+                            <span class="chip-caret">&#x203A;</span>
+                        </button>
+                    </div>
+                    <button class="gen-btn" id="gen-btn" type="button">
+                        Generate <span class="gen-sparkle">&#x2726;</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="dropdown hidden" id="model-dropdown"></div>
+            <div class="dropdown hidden" id="ratio-dropdown"></div>
+            <div class="dropdown hidden" id="project-dropdown"></div>
+
+            <div class="fav-picker hidden" id="fav-picker">
+                <div id="tag-filter-badge" class="tag-filter-badge hidden">
+                    <span class="tfb-label">tag:</span>
+                    <span id="tfb-name"></span>
+                    <button id="tfb-clear" type="button" tabindex="-1">&times;</button>
+                </div>
+                <div class="fav-list" id="fav-list"></div>
+                <div class="fav-empty hidden" id="fav-empty">즐겨찾기가 없습니다</div>
+            </div>
+
+            <div class="fav-picker hidden" id="tag-picker">
+                <div class="dropdown-title">태그 필터</div>
+                <div class="fav-list" id="tag-list"></div>
+                <div class="fav-empty hidden" id="tag-empty">태그가 없습니다</div>
+            </div>
+
+            <div class="status-bar" id="status-bar">
+                <span class="status-indicator" id="status-indicator"></span>
+                <span id="status-text">CLI 미연결</span>
+                <span class="status-sep">&middot;</span>
+                <span id="status-credits"></span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Spotlight 전용 라이트박스 (viewer 의 #lightbox 와 분리) -->
+    <div class="sp-lightbox hidden" id="sp-lightbox">
+        <button class="sp-lightbox-close" type="button" id="sp-lightbox-close">&times;</button>
+        <div class="sp-lightbox-body" id="sp-lightbox-body"></div>
+    </div>
+
+    <script type="module" src="/js/app.js"></script>
+    <script type="module" src="/js/spotlight/app.js"></script>
 </body>
 </html>
