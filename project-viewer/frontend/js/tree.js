@@ -7,9 +7,26 @@ import { fileTree, previewContent } from "./dom.js";
 import {
     kindIcon, humanSize, cssQueryEscape, findNodeByPath,
 } from "./utils.js";
-import { rootTree, setCurrentDir } from "./state.js";
+import { rootTree, setCurrentDir, setLastFocusArea } from "./state.js";
 import { updateTreeLabelColors } from "./favorites.js";
 import { selectCard, getSelectedPaths } from "./selection.js";
+import { reapplyPanelSearch } from "./panel-search.js";
+
+// ── 폴더 collapsed 상태 영구 저장 ─────────────────────────────
+// 트리가 재렌더돼도(SSE 갱신, 프로젝트 전환 등) 사용자가 접어둔 폴더는 그대로 유지.
+// 키는 모든 프로젝트 공유 (같은 이름의 경로면 의도가 보통 동일).
+const COLLAPSED_KEY = "viewer.collapsedDirs";
+const _collapsedDirs = new Set((() => {
+    try {
+        const v = JSON.parse(localStorage.getItem(COLLAPSED_KEY) || "[]");
+        return Array.isArray(v) ? v : [];
+    } catch { return []; }
+})());
+function _saveCollapsed() {
+    try {
+        localStorage.setItem(COLLAPSED_KEY, JSON.stringify([..._collapsedDirs]));
+    } catch {}
+}
 
 // 외부 callback (grid / menus 모듈)
 let _showFolderGrid = () => {};
@@ -36,6 +53,14 @@ export function setActiveLabel(label) {
     label.classList.add("active");
 }
 
+/** path 로 활성 라벨 설정 — file-tree 와 gen-tree 양쪽 모두에 적용 (탭에 따라 보이는 트리가 달라지므로). */
+export function setActiveLabelByPath(path, isDir) {
+    document.querySelectorAll(".tree .active").forEach((el) => el.classList.remove("active"));
+    const cls = isDir ? "dir-label" : "file-label";
+    document.querySelectorAll(`.tree .${cls}[data-path="${cssQueryEscape(path)}"]`)
+        .forEach((l) => l.classList.add("active"));
+}
+
 /** 전체 트리 재렌더. target 미지정 시 사이드바의 fileTree. */
 export function renderTree(rootNode, project, target = fileTree) {
     target.innerHTML = "";
@@ -49,24 +74,33 @@ export function renderTree(rootNode, project, target = fileTree) {
     }
     // 두 트리 모두 동일 selector(`.tree .file-label`) 로 색상 동기화.
     updateTreeLabelColors();
+    // 트리가 통째로 재구성됐으니 현재 검색 필터 다시 적용
+    reapplyPanelSearch();
 }
 
 function renderNode(node, project) {
     const li = document.createElement("li");
 
     if (node.type === "dir") {
-        li.className = "dir";
+        // 저장된 collapsed 상태 복원 — 트리 재렌더 후에도 사용자가 접었던 폴더 유지.
+        const startCollapsed = node.children.length > 0 && _collapsedDirs.has(node.path);
+        li.className = "dir" + (startCollapsed ? " collapsed" : "");
         const row = document.createElement("div");
         row.className = "dir-row";
 
         const chev = document.createElement("span");
         chev.className = "chevron";
-        chev.textContent = node.children.length > 0 ? "▼" : "·";
-        if (node.children.length > 0) {
+        if (node.children.length === 0) {
+            chev.textContent = "·";
+        } else {
+            chev.textContent = startCollapsed ? "▶" : "▼";
             chev.addEventListener("click", (e) => {
                 e.stopPropagation();
                 const collapsed = li.classList.toggle("collapsed");
                 chev.textContent = collapsed ? "▶" : "▼";
+                if (collapsed) _collapsedDirs.add(node.path);
+                else _collapsedDirs.delete(node.path);
+                _saveCollapsed();
             });
         }
         row.appendChild(chev);
@@ -77,6 +111,7 @@ function renderNode(node, project) {
         label.dataset.path = node.path;
         label.addEventListener("click", () => {
             setActiveLabel(label);
+            setLastFocusArea("tree");
             setCurrentDir(node.path);
             _showFolderGrid(project, node);
         });
@@ -130,13 +165,21 @@ function renderNode(node, project) {
             e.stopPropagation();
             row.classList.remove("drag-over");
 
-            // 1) 트리 → 트리 (기존)
-            const fromTreePath = e.dataTransfer.getData("text/x-tree-path");
-            if (fromTreePath) {
-                const fromDir = fromTreePath.includes("/")
-                    ? fromTreePath.substring(0, fromTreePath.lastIndexOf("/")) : "";
-                if (fromDir === node.path) return;
-                await _moveFile(project, fromTreePath, node.path);
+            // 1) 트리/그리드 → 트리 폴더 (단일/다중)
+            const multi = e.dataTransfer.getData("text/x-tree-paths");
+            const single = e.dataTransfer.getData("text/x-tree-path");
+            const all = multi ? multi.split("\n").filter(Boolean)
+                              : (single ? [single] : []);
+            const paths = all.filter((p) => {
+                const fromDir = p.includes("/") ? p.substring(0, p.lastIndexOf("/")) : "";
+                return fromDir !== node.path;
+            });
+            if (paths.length > 0) {
+                // 마지막 한 번만 reload 처리 — N개 이동에 reload 1회
+                for (let i = 0; i < paths.length; i++) {
+                    const isLast = i === paths.length - 1;
+                    await _moveFile(project, paths[i], node.path, !isLast);
+                }
                 return;
             }
 
@@ -185,6 +228,9 @@ function renderNode(node, project) {
                 selectCard(cardEl);
                 cardEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
             }
+            // selectCard 가 lastFocusArea 를 "grid" 로 바꿔놓으므로 마지막에 되돌림.
+            // 트리 라벨 클릭/방향키 이동은 항상 트리 영역 유지가 자연스러움.
+            setLastFocusArea("tree");
         });
 
         // 파일 우클릭 = 컨텍스트 메뉴

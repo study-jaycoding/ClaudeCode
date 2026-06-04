@@ -1,97 +1,176 @@
-# 프로젝트 뷰어 + Higgsfield Spotlight 통합
+# Project Viewer
 
-`project-manager` 가 만든 프로젝트 폴더의 **이미지/영상/텍스트** 를 브라우저에서 미리보기하고, 동시에 화면 하단 Spotlight 바에서 **Higgsfield CLI 로 생성** 까지 할 수 있는 통합 도구. 결과는 선택한 프로젝트 폴더에 자동 저장 + favorites 자동 등록.
+브라우저에서 프로젝트 폴더의 이미지/영상/텍스트를 미리보고, 즐겨찾기·태그·드래그앤드롭 업로드까지 관리하는 로컬 도구. Higgsfield Spotlight 와 같은 `CCDATA_DIR` 을 보면 생성 결과가 자동으로 트리에 반영된다.
+
+> **처음 쓰는 분은 [USAGE.md (사용법 가이드)](USAGE.md) 부터 읽으세요.**
+> 이 README 는 설치·배포·환경 설정 위주입니다.
+
+## 빠른 시작
+
+```cmd
+install.bat        :: 최초 1회 — Python 체크 + .env 생성
+start.bat          :: 매일 — 서버 시작 (포트 8766)
+update.bat         :: 가끔 — git pull + 안내
+```
+
+브라우저에서 <http://127.0.0.1:8766> 접속.
+
+## 사전 요구사항
+
+- **Python 3.10+** — <https://python.org>
+- (선택) **Higgsfield Spotlight** — 생성 통합 시 [`../higgsfield-spotlight/`](../higgsfield-spotlight/) 같이 설치
+
+## 설정 (`.env`)
+
+`install.bat` 가 `.env.example` 을 `.env` 로 복사한다. 필요한 항목만 편집:
+
+| 키 | 기본값 | 설명 |
+|---|---|---|
+| `CCDATA_DIR` | `D:/ClaudeCode-data` | 프로젝트·favorites 의 부모 디렉토리 |
+| `CCDATA_PROJECTS_DIR` | `<CCDATA_DIR>/projects` | 분리 override |
+| `CCDATA_FAVORITES_FILE` | `<CCDATA_DIR>/favorites.json` | 분리 override |
+| `PV_PORT` | `8766` | listen 포트 |
+| `PV_BIND` | `127.0.0.1` | listen 주소 (LAN 노출은 `0.0.0.0`) |
+| `PV_EXTRA_ORIGINS` | (빈 값) | 같은 origin 외 허용할 origin (콤마 구분) |
+| `PV_EXTRA_HOSTS` | (빈 값) | 같은 origin 외 허용할 host (콤마 구분) |
+| `PV_MAX_UPLOAD_MB` | `500` | 업로드 최대 크기 (MB) |
+
+## 팀 공유 — 추천: 하이브리드 (서버 1대 + 각자 spotlight)
+
+50명 규모 팀은 다음 구조가 가장 안전·편리합니다:
+
+```
+                ┌─────────────────────────────────┐
+                │  팀 서버 1대                    │
+                │  ┌──────────────────────────┐   │
+                │  │ PV (Python 실행 중)      │   │
+                │  │ http://server:8766       │   │
+                │  └──────────────────────────┘   │
+                │  ┌──────────────────────────┐   │
+                │  │ team-data/projects/      │   │
+                │  │ team-data/favorites.json │   │
+                │  └──────────────────────────┘   │
+                └─────────────────────────────────┘
+                          ↑↓ LAN
+   ┌──────────┐    ┌──────────┐    ┌──────────┐
+   │ 사용자 A │    │ 사용자 B │    │ 사용자 C │
+   │ 브라우저 │    │ 브라우저 │    │ 브라우저 │
+   │+spotlight│    │+spotlight│    │+spotlight│
+   │(자기계정)│    │(자기계정)│    │(자기계정)│
+   └──────────┘    └──────────┘    └──────────┘
+```
+
+- **PV 는 서버 1대에서만 실행** — 모두가 같은 트리·즐겨찾기 보며 협업
+- **Spotlight 는 각 PC 에서 실행** — 각자 자기 Higgsfield 계정으로 생성, credit 분리
+- 생성 결과는 NAS 에 자동 저장 → 모두의 PV 에 즉시 반영
+
+### 서버 1대 설정
+
+```env
+# 서버의 .env
+PV_BIND=0.0.0.0
+PV_EXTRA_ORIGINS=http://192.168.1.10:8766,http://pv.company.local:8766
+PV_EXTRA_HOSTS=192.168.1.10:8766,pv.company.local:8766
+CCDATA_DIR=//nas/team-data
+```
+
+`start.bat` 실행 → 다른 PC 가 `http://192.168.1.10:8766` 접속.
+
+### 각 사용자 PC 설정 (Spotlight 만)
+
+[higgsfield-spotlight](../higgsfield-spotlight/) 를 각자 자기 PC 에 설치하고 `.env` 의 `CCDATA_DIR` 만 같은 NAS 경로로:
+
+```env
+CCDATA_DIR=//nas/team-data
+```
+
+그리고 자기 계정으로 `higgsfield auth login`.
+
+### 모두 자기 PC 에서 실행 (대안)
+
+서버 운영이 어려우면 PV 도 각자 자기 PC 에 설치하고 `CCDATA_DIR` 만 공유:
+
+```env
+CCDATA_DIR=Z:/team-data
+```
+
+- 장점: 서버 의존성 0, 설치 간단
+- 단점: 각자 Python 설치 필요. 50명 규모면 하이브리드가 더 깔끔
+
+## 동시 작업 안전성
+
+favorites.json 은 단일 파일이지만 **cross-process file lock** 으로 보호됩니다 (`<CCDATA_DIR>/favorites.json.lock`):
+
+- PV 서버의 thread 들 사이: 직렬화 ✓
+- PV 서버와 각 사용자의 spotlight 사이: cross-process lock 으로 직렬화 ✓
+- 여러 사용자가 동시 즐겨찾기 토글 / 생성 결과 자동 등록 — 모두 안전
+
+생성 메타데이터는 [entry-per-file 구조](#-생성-메타데이터)로 본질적으로 race-free.
+
+### NAS 선택
+- **SMB (Synology/QNAP/Windows Share)** — 권장. file lock 잘 작동
+- **NFS** — 락 신뢰도 낮음. 비추
+- **클라우드 동기화 (Dropbox/OneDrive)** — sync 충돌 사본 만들어짐. 비추
+
+### Windows 260자 path 제한
+한글 폴더 + 긴 파일명 시 `\\?\` prefix 또는 Win10+ long-path 옵션 켜기.
 
 ## 폴더 구조
 
 ```
 project-viewer/
 ├── backend/
-│   ├── server.py        # HTTP 서버 (viewer + spotlight 라우팅)
-│   └── spotlight/       # Higgsfield CLI 생성 모듈
-│       ├── cli.py            # higgsfield 명령 subprocess
-│       ├── catalog.py        # 27개 모델 카탈로그
-│       ├── generation.py     # 생성 흐름 (병렬, 메타데이터)
-│       ├── projects_ops.py   # 다운로드 + favorites 업데이트
-│       └── api.py            # 엔드포인트 함수
+│   ├── server.py             # HTTP 서버 (PV + spotlight 라우팅)
+│   └── spotlight/            # 임베디드 spotlight 모듈
 ├── frontend/
-│   ├── index.html       # viewer + spotlight 오버레이
-│   ├── style.css        # 합본 스타일
-│   ├── style-spotlight-override.css  # 하단 도킹 + 충돌 회피
-│   └── js/
-│       ├── app.js            # viewer 진입점
-│       ├── (viewer 모듈들)
-│       └── spotlight/        # spotlight 모듈 (ES Modules)
-│           ├── app.js
-│           ├── dom.js, state.js, api.js, ...
-│           └── (총 18개 모듈)
-├── start.bat
+│   ├── index.html
+│   ├── js/                   # ES Module 17개
+│   └── style*.css
+├── .env.example              # 설정 템플릿
+├── install.bat / update.bat / start.bat
 └── README.md
 
-D:\ClaudeCode-data\projects\         # 프로젝트 폴더 (git 바깥)
-D:\ClaudeCode-data\favorites.json    # 공유 favorites
+<CCDATA_DIR>/projects/        # 프로젝트 폴더 (repo 바깥)
+<CCDATA_DIR>/favorites.json   # 공유 favorites
 ```
-
-## 사전 요구사항
-
-- Python 3.10+
-- Node.js + `@higgsfield/cli` (`npm install -g @higgsfield/cli`)
-- Higgsfield CLI 로그인 (`higgsfield auth login`, 브라우저 자동 열림)
-  - 미로그인 시 Spotlight 우하단 상태바 클릭으로 트리거 가능
-
-## 실행 방법
-
-### Windows
-
-`start.bat` 더블클릭, 또는 PowerShell 에서:
-
-```powershell
-cd d:\ClaudeCode\project-viewer\backend
-python server.py
-```
-
-브라우저에서 <http://127.0.0.1:8766> 접속.
-
-### 종료
-
-콘솔에서 `Ctrl+C`.
-
-## 사용법
-
-1. 상단 드롭다운에서 보고 싶은 프로젝트를 선택
-2. 좌측 트리에서 파일을 클릭
-3. 우측 미리보기 영역에 자동 표시
-   - 🖼️ 이미지: `<img>` 로 표시
-   - 🎬 영상: `<video controls>` 로 재생 (Range 요청 지원으로 seek 가능)
-   - 📄 텍스트: 코드 하이라이트 없이 모노스페이스 폰트로 표시
-   - 📦 그 외: "지원하지 않음" 안내
 
 ## 지원 확장자
 
 | 종류 | 확장자 |
 |---|---|
 | 이미지 | png, jpg, jpeg, gif, webp, svg, bmp, ico |
-| 영상 | mp4, webm, mov, mkv, avi, m4v *(mp4/webm 외에는 브라우저에 따라 재생 불가할 수 있음)* |
+| 영상 | mp4, webm, mov, mkv, avi, m4v |
 | 텍스트 | txt, md, json, py, js, ts, jsx, tsx, html, css, scss, log, yaml, yml, ini, conf, csv, xml, bat, sh, ps1, .gitignore, .env |
+
+## 주요 단축키
+
+| 키 | 동작 |
+|---|---|
+| `F2` | 단일 선택 이름 변경 (인라인) |
+| `Delete` | 선택 항목 삭제 (다중 가능) |
+| `Enter` | 단일 선택 열기 (폴더 진입 / 이미지·비디오 라이트박스) |
+| `Esc` | 라이트박스 닫기 / 선택 해제 |
+| `Ctrl+A` | 그리드 전체 선택 |
+| `Ctrl+Z` | 마지막 작업 되돌리기 (이동·이름변경·태그·마커) |
+| `Ctrl+Shift+N` | 현재 폴더에 새 폴더 |
 
 ## API
 
 | Method | Path | 설명 |
 |---|---|---|
-| GET | `/api/projects` | 프로젝트 목록 JSON |
-| GET | `/api/tree?project=NAME` | 트리 구조 JSON |
-| GET | `/api/file?project=NAME&path=REL` | 텍스트 파일 내용 JSON (최대 1MB) |
-| GET | `/media?project=NAME&path=REL` | 이미지/영상 바이너리 (Range 지원) |
-
-## 백/프 분리 원칙
-
-- 백엔드는 `backend/` 안에서 완결. 프론트엔드는 `frontend/` 안에 정적 자산만.
-- 백엔드는 `/api/*` 와 `/media` 만 API 로 응답하고, 그 외 GET 은 `frontend/` 의 정적 파일을 서빙한다.
-- 같은 origin 이므로 CORS 설정이 필요 없다.
+| GET | `/api/projects` | 프로젝트 목록 |
+| GET | `/api/tree?project=NAME` | 트리 구조 |
+| GET | `/api/file?project=NAME&path=REL` | 텍스트 파일 (최대 1MB) |
+| GET | `/api/favorites` | 즐겨찾기 전체 |
+| POST | `/api/favorites` | 즐겨찾기 통째 덮어쓰기 |
+| GET | `/api/events` | SSE — favorites.json 변경 알림 |
+| GET | `/media?project=NAME&path=REL` | 이미지/영상 (Range 지원) |
+| POST | `/api/upload` | 드래그 업로드 |
+| POST | `/api/move`, `/api/rename`, `/api/delete`, `/api/reveal`, `/api/folder` | 파일 조작 |
 
 ## 보안 메모
 
-- 모든 GET 요청. 파일 시스템을 수정하지 않는다.
-- 경로 탈출(`..`, 절대경로 우회) 시도는 모두 차단.
-- 텍스트는 최대 1MB 까지만 응답 (잘림 표시).
-- 로컬(127.0.0.1) 바인딩만 한다.
+- 기본 bind 는 `127.0.0.1` (로컬만). LAN 노출은 명시적으로 `PV_BIND=0.0.0.0` 설정 필요
+- LAN 노출 시 인증 없음 — 신뢰된 사내망에서만 사용
+- 경로 탈출 시도(`..`, 절대경로 우회) 차단
+- 업로드 / 파일 조작은 same-origin 요청만 허용 (Host / Sec-Fetch-Site 체크)

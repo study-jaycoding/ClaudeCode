@@ -8,9 +8,17 @@ import {
     lassoActive, setLassoActive,
     lassoPreSelected, setLassoPreSelected,
     suppressClickUntil, setSuppressClickUntil,
+    setLastFocusArea,
+    currentProject,
+    shiftAnchorCard, setShiftAnchorCard,
 } from "./state.js";
 import { previewContent, previewSection, lasso } from "./dom.js";
 import { cssQueryEscape } from "./utils.js";
+import {
+    markCardSeen,
+    updateFavCount, updateCardNewBadges, updateTreeLabelColors,
+    renderFavoritesItems,
+} from "./favorites.js";
 
 // 외부 callback (popup.js 분리 후 등록)
 let _closeContextPopup = () => {};
@@ -24,24 +32,58 @@ export function refreshDraggable() {
     // 선택 상태와 무관하게 항상 외부 드래그 가능. 기존 호출처 호환용으로 보존.
 }
 
-/** 카드 선택. Shift = 범위 선택, Ctrl/Meta = 토글 추가, 그 외 = 단일 선택. */
+/** 현재 .selected 인 모든 카드의 NEW 배지를 dismiss. 다중 선택 (shift/ctrl/lasso/Ctrl+A) 에서 사용.
+ *  하나라도 실제로 새 항목이었다면 사이드바/배지 UI 한 번만 갱신. */
+export function markSelectedCardsSeen() {
+    if (!currentProject) return;
+    let dirty = false;
+    for (const card of previewContent.querySelectorAll(".card.selected")) {
+        const path = card.dataset.path;
+        if (!path) continue;
+        if (markCardSeen(currentProject, path)) dirty = true;
+    }
+    if (dirty) {
+        updateFavCount();
+        updateCardNewBadges();
+        updateTreeLabelColors();
+        renderFavoritesItems();
+    }
+}
+
+/** 카드 선택. Shift = 범위 선택, Ctrl/Meta = 토글 추가, 그 외 = 단일 선택.
+ *  Shift 시:
+ *   - anchor 는 첫 shift 발동 시점의 lastSelectedCard 로 고정, 이후 shift 연속 발동에도 유지
+ *   - focus(=lastSelectedCard) 는 매번 새 카드로 갱신해 다음 shift 화살표가 그 위치 기준으로 이동
+ *   - 단일/ctrl 진입 시 anchor 리셋 */
 export function selectCard(card, e) {
+    setLastFocusArea("grid");
     const all = Array.from(previewContent.querySelectorAll(".card"));
     if (e && e.shiftKey && lastSelectedCard && all.includes(lastSelectedCard)) {
-        const start = all.indexOf(lastSelectedCard);
+        // anchor 가 아직 없거나 현재 그리드에 없으면 lastSelectedCard 를 anchor 로
+        let anchor = shiftAnchorCard;
+        if (!anchor || !all.includes(anchor)) {
+            anchor = lastSelectedCard;
+            setShiftAnchorCard(anchor);
+        }
+        const start = all.indexOf(anchor);
         const end = all.indexOf(card);
         const [a, b] = [Math.min(start, end), Math.max(start, end)];
         all.forEach((c, i) => c.classList.toggle("selected", i >= a && i <= b));
+        setLastSelectedCard(card);  // focus 갱신
     } else if (e && (e.ctrlKey || e.metaKey)) {
         card.classList.toggle("selected");
         setLastSelectedCard(card);
+        setShiftAnchorCard(null);
     } else {
         all.forEach((c) => c.classList.remove("selected"));
         card.classList.add("selected");
         setLastSelectedCard(card);
+        setShiftAnchorCard(null);
     }
     syncTreeSelection();
     refreshDraggable();
+    // 다중 선택 (shift range / ctrl 토글) 시 선택된 모든 카드의 NEW 도 dismiss.
+    markSelectedCardsSeen();
 }
 
 export function getSelectedCards() {
@@ -60,15 +102,15 @@ export function clearSelection() {
     _closeContextPopup();
 }
 
-/** 그리드 선택 상태를 트리 라벨에도 반영. */
+/** 그리드 선택 상태를 트리 라벨에도 반영.
+ *  file-tree 와 gen-tree 양쪽에 같은 path 가 존재할 수 있으므로 querySelectorAll 로 모두 적용. */
 export function syncTreeSelection() {
     document.querySelectorAll(".tree .file-label.selected, .tree .dir-label.selected")
         .forEach((l) => l.classList.remove("selected"));
     for (const path of getSelectedPaths()) {
-        const label = document.querySelector(
+        document.querySelectorAll(
             `.tree .file-label[data-path="${cssQueryEscape(path)}"]`
-        );
-        if (label) label.classList.add("selected");
+        ).forEach((label) => label.classList.add("selected"));
     }
 }
 
@@ -79,11 +121,16 @@ export function syncTreeSelection() {
 // lasso DOM 이 mouse hit-test 를 가로채지 않도록 명시 (CSS 누락 방어).
 lasso.style.pointerEvents = "none";
 
-// 미리보기 영역의 빈 공간 클릭 시 선택 해제
-previewContent.addEventListener("click", (e) => {
-    if (e.target === previewContent || e.target.classList.contains("grid")) {
-        clearSelection();
-    }
+// 미리보기 섹션 빈 공간 클릭 시 selection 해제.
+// previewSection 범위 — previewContent 의 빈곳뿐 아니라 previewInfo(breadcrumb),
+// view-controls(빈곳), source-tag-filter-bar 빈곳 등 어디든 잡힘.
+// 카드와 인터랙티브 요소만 제외.
+previewSection.addEventListener("click", (e) => {
+    if (e.target.closest(".card")) return;
+    if (e.target.closest("button, a, input, textarea, select, label")) return;
+    if (e.target.closest(".tag-chip")) return;
+    if (e.target.closest(".bc-seg")) return;
+    clearSelection();
 });
 
 // capture 단계에서 lasso 직후 click 을 잡아 카드 click 호출을 막음 (lasso 결과 유지)
@@ -102,6 +149,8 @@ previewSection.addEventListener("mousedown", (e) => {
     if (e.target.closest("button, a, input, textarea, select, option, label")) return;
     // 카드 위 mousedown 은 native drag 우선 (lasso 시작 X) — 한 번에 끌 수 있도록.
     if (e.target.closest(".card")) return;
+    // viewer 탭의 stage/컨트롤 영역에서 mousedown → lasso 시작 금지 (scrub 가 작동해야 함)
+    if (e.target.closest("#viewer-stage, .viewer-controls, .viewer-timeline, .vsb-track")) return;
     e.preventDefault();
     setLassoStart({ x: e.clientX, y: e.clientY, ctrl: e.ctrlKey || e.metaKey });
     setLassoActive(false);
@@ -146,6 +195,8 @@ document.addEventListener("mouseup", () => {
         lasso.style.width = "0";
         lasso.style.height = "0";
         refreshDraggable();
+        // lasso 로 선택된 모든 카드의 NEW 도 dismiss.
+        markSelectedCardsSeen();
         // mouseup 직후 발화되는 click 을 250ms 동안 무시 → lasso 결과 유지
         setSuppressClickUntil(Date.now() + 250);
     }

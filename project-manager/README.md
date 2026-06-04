@@ -35,6 +35,19 @@ python server.py
 
 콘솔에서 `Ctrl+C`.
 
+### 환경변수
+
+| 이름 | 기본값 | 설명 |
+|---|---|---|
+| `PROJECTS_DIR` | `D:/ClaudeCode-data/projects` | 생성된 프로젝트가 저장될 폴더. 다른 PC 에 배포할 때 이 값만 바꾸면 된다. |
+
+PowerShell 예시:
+
+```powershell
+$env:PROJECTS_DIR = "C:\Users\me\my-projects"
+python server.py
+```
+
 ## 사용법
 
 1. 입력창에 프로젝트 이름 입력 → "생성" 버튼 클릭

@@ -1,13 +1,13 @@
 // =====================================================================
-// 정보 팝업 (좌클릭 long-press) + 카드 long-press 핸들러
+// 정보 팝업 — 카드 휠 클릭(middle button) 으로 표시
 // - cp-link click / contextmenu 는 contextPopup 단에서 delegation 으로 한 번만 등록
 // - 외부 click / Esc 로 닫기
 // 외부 의존: openTreeMenu (menus 모듈, callback)
 // =====================================================================
 import { contextPopup } from "./dom.js";
 import { escapeHtml, humanSize, kindFromPath } from "./utils.js";
-import { favorites, longPressTimer, setLongPressTimer } from "./state.js";
-import { getFavorite } from "./favorites.js";
+import { favorites } from "./state.js";
+import { getFavorite, getDerivedOf, getFavById } from "./favorites.js";
 import { apiGetMeta } from "./api.js";
 import { openLightbox } from "./lightbox.js";
 
@@ -19,42 +19,22 @@ export function setOpenTreeMenuForPopupCallback(fn) {
 // 현재 팝업의 프롬프트 텍스트 (복사 버튼 대상). 팝업 하나만 떠 있으므로 모듈 단일.
 let _currentPrompt = "";
 
-// --- 카드 long-press 타이머 ---
-const LONG_PRESS_MS = 350;
-const LONG_PRESS_MOVE_TOL = 6;
-
-function cancelLongPress() {
-    if (longPressTimer) {
-        clearTimeout(longPressTimer);
-        setLongPressTimer(null);
-    }
-}
-
-/** 카드 mousedown 에 long-press → showContextPopup 핸들러 부착. */
+/** 카드 휠 클릭(middle button) → 정보 팝업 표시.
+    이름은 호환 위해 그대로 유지하지만 동작은 middle-click 으로 변경됨. */
 export function attachLongPress(card, project, node) {
-    let startX = 0, startY = 0;
+    // 휠 클릭 = 정보 팝업
     card.addEventListener("mousedown", (e) => {
-        if (e.button !== 0) return;
+        if (e.button !== 1) return;             // middle button only
         if (e.target.closest(".card-marker")) return;
         if (node.type === "dir") return;
-        if (e.shiftKey || e.ctrlKey || e.metaKey) return;
-        startX = e.clientX; startY = e.clientY;
-        const mx = e.clientX, my = e.clientY;
-        cancelLongPress();
-        setLongPressTimer(setTimeout(() => {
-            setLongPressTimer(null);
-            showContextPopup(mx, my, project, node);
-        }, LONG_PRESS_MS));
+        // 브라우저 기본 동작(autoscroll 등) 차단
+        e.preventDefault();
+        showContextPopup(e.clientX, e.clientY, project, node);
     });
-    card.addEventListener("mousemove", (e) => {
-        if (!longPressTimer) return;
-        if (Math.abs(e.clientX - startX) + Math.abs(e.clientY - startY) > LONG_PRESS_MOVE_TOL) {
-            cancelLongPress();
-        }
+    // auxclick (middle button release) 도 기본동작 차단 (Linux/Mac 일부)
+    card.addEventListener("auxclick", (e) => {
+        if (e.button === 1) e.preventDefault();
     });
-    card.addEventListener("mouseup", cancelLongPress);
-    card.addEventListener("mouseleave", cancelLongPress);
-    card.addEventListener("dragstart", cancelLongPress);
 }
 
 // --- 정보 팝업 ---
@@ -161,13 +141,13 @@ export async function showContextPopup(mx, my, project, node) {
 
         if (fav.sourceIds && fav.sourceIds.length > 0) {
             const srcLinks = fav.sourceIds.map((sid) => {
-                const src = favorites.find((f) => f.id === sid);
+                const src = getFavById(sid);
                 return src ? cpLinkThumbHtml(src, "🔗") : `<code>${escapeHtml(sid)}</code>`;
             }).join("");
             sourceRows.push(`<tr><th>소스</th><td>${srcLinks}</td></tr>`);
         }
 
-        const derived = favorites.filter((f) => (f.sourceIds || []).includes(fav.id));
+        const derived = getDerivedOf(fav.id);
         if (derived.length > 0) {
             const drvLinks = derived.map((d) => cpLinkThumbHtml(d, "→")).join("");
             sourceRows.push(`<tr><th>파생</th><td>${drvLinks}</td></tr>`);
@@ -296,7 +276,7 @@ contextPopup.addEventListener("click", (e) => {
     const link = e.target.closest(".cp-link");
     if (!link) return;
     e.stopPropagation();
-    const target = favorites.find((f) => f.id === link.dataset.id);
+    const target = getFavById(link.dataset.id);
     if (!target) return;
     const k = kindFromPath(target.path);
     closeContextPopup();
@@ -309,7 +289,7 @@ contextPopup.addEventListener("contextmenu", (e) => {
     e.stopPropagation();
     const link = e.target.closest(".cp-link");
     if (!link) return;
-    const target = favorites.find((f) => f.id === link.dataset.id);
+    const target = getFavById(link.dataset.id);
     if (!target) return;
     _openTreeMenu(e.clientX, e.clientY, target.project, [target.path], {
         actions: ["navigate", "reveal"],

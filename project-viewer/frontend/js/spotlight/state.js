@@ -1,8 +1,8 @@
 // 공유 가변 상태. 다른 모듈은 직접 import 해서 읽고/쓴다.
 
-import { PROJECT_KEY } from "./constants.js";
 import { currentProject as viewerCurrentProject } from "../state.js";
 
+// state.project 는 project.js 가 viewer 의 currentProject 변경 이벤트를 받아 동기화.
 export const state = {
     type: "image",
     model: "nano_banana_2",
@@ -11,15 +11,14 @@ export const state = {
     repeatCount: 1,
     connected: false,
     credits: 0,
-    project: (() => { try { return localStorage.getItem(PROJECT_KEY) || ""; } catch { return ""; } })(),
+    project: "",
 };
 
-// 모델/즐겨찾기/프로젝트 캐시
+// 모델/즐겨찾기 캐시
 export const cache = {
     allModels: [],
     models: [],         // 현재 type 으로 필터링된 목록
     favorites: [],
-    projects: [],
 };
 
 // 피커 임시 상태
@@ -35,10 +34,9 @@ export function getModel(id) {
     return cache.models.find((m) => m.id === id);
 }
 
-// viewer 의 "소스" 탭과 동일한 조건: 사용자가 명시적으로 소스 토글한 항목 중
-// Result/ (자동 생성물) 이 아닌 것.
+// viewer 와 동일: 사용자가 isSource = true 로 토글한 항목 (생성물도 포함 가능).
 export function isSourceFav(f) {
-    return f && f.isSource === true && !String(f.path || "").startsWith("Result/");
+    return f && f.isSource === true;
 }
 
 // @ 피커 / 태그 필터가 검색하는 집합:

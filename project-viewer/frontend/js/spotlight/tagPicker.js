@@ -4,7 +4,7 @@ import {
     tagPicker, tagList, tagEmpty,
     tagActiveBadge, tabName, tabClear, tfbClear,
     promptRowEl, promptInput, panelEl,
-    modelDropdown, ratioDropdown, projectDropdown,
+    modelDropdown, ratioDropdown,
     tagFilterBadge,
 } from "./dom.js";
 import { anchorPickerAbovePanel } from "./pickerLayout.js";
@@ -23,7 +23,6 @@ function getAllTags() {
 export function openTagPicker() {
     modelDropdown.classList.add("hidden");
     ratioDropdown.classList.add("hidden");
-    if (projectDropdown) projectDropdown.classList.add("hidden");
     pickerState.tagHighlight = -1;
     renderTagList();
     tagPicker.classList.remove("hidden");
@@ -43,9 +42,19 @@ export function renderTagList() {
     const sl = getSlashQueryInfo();
     const filter = sl ? sl.query.toLowerCase() : "";
     const allTags = getAllTags();
-    pickerState.filteredTags = filter
-        ? allTags.filter((t) => t.toLowerCase().includes(filter))
-        : allTags;
+    if (filter) {
+        const matched = allTags.filter((t) => t.toLowerCase().includes(filter));
+        matched.sort((a, b) => {
+            const al = a.toLowerCase(), bl = b.toLowerCase();
+            const ap = al.startsWith(filter) ? 0 : 1;
+            const bp = bl.startsWith(filter) ? 0 : 1;
+            if (ap !== bp) return ap - bp;
+            return al.localeCompare(bl);
+        });
+        pickerState.filteredTags = matched;
+    } else {
+        pickerState.filteredTags = allTags;
+    }
 
     if (pickerState.filteredTags.length === 0) {
         tagList.innerHTML = "";
@@ -56,6 +65,12 @@ export function renderTagList() {
         return;
     }
     tagEmpty.classList.add("hidden");
+    // 필터 결과의 첫 항목 자동 하이라이트 (Enter 로 바로 확정 가능).
+    if (pickerState.filteredTags.length > 0
+        && (pickerState.tagHighlight < 0
+            || pickerState.tagHighlight >= pickerState.filteredTags.length)) {
+        pickerState.tagHighlight = 0;
+    }
     tagList.innerHTML = "";
     pickerState.filteredTags.forEach((tag, i) => {
         const count = sourceFavorites().filter((f) => Array.isArray(f.tags) && f.tags.includes(tag)).length;

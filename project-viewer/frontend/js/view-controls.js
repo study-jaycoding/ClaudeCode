@@ -14,6 +14,15 @@ import {
     viewBtns, cardSizeSlider, cardSizeValueEl,
     sortSelect, sortDirBtn, previewContent,
 } from "./dom.js";
+import { kindFromPath } from "./utils.js";
+
+// 항목의 kind 를 일관되게 얻는다.
+// 트리 노드(폴더 그리드)는 item.kind 가 미리 채워져 있고,
+// 즐겨찾기/소스 그리드 항목은 path 만 있어 직접 유추해야 함.
+function itemKind(item) {
+    if (item.type === "dir") return "dir";
+    return item.kind || kindFromPath(item.path || "");
+}
 
 const VIEW_KEY = "viewer.view";
 const SIZE_KEY = "viewer.cardSize";
@@ -60,7 +69,7 @@ export function sortItems(items) {
         let cmp = 0;
         switch (currentSortKey) {
             case "kind":
-                cmp = (a.kind || "").localeCompare(b.kind || "");
+                cmp = itemKind(a).localeCompare(itemKind(b));
                 if (cmp === 0) cmp = getName(a).localeCompare(getName(b), undefined, { numeric: true });
                 break;
             case "size":
@@ -88,6 +97,56 @@ export function sortItems(items) {
         }
         return cmp * mul;
     });
+}
+
+// 정렬 키에 맞춰 항목의 그룹 라벨을 만든다. name 정렬은 그룹화 안 함 (null 반환).
+export function groupLabelFor(item, sortKey = currentSortKey) {
+    switch (sortKey) {
+        case "kind": {
+            const k = itemKind(item);
+            return ({ image: "이미지", video: "비디오", text: "문서", dir: "폴더" }[k]) || "기타";
+        }
+        case "size": {
+            const sz = item.size || 0;
+            if (sz < 100 * 1024) return "100KB 미만";
+            if (sz < 1024 * 1024) return "100KB ~ 1MB";
+            if (sz < 10 * 1024 * 1024) return "1 ~ 10MB";
+            if (sz < 100 * 1024 * 1024) return "10 ~ 100MB";
+            return "100MB 이상";
+        }
+        case "mtime":
+        case "addedAt": {
+            const ts = sortKey === "addedAt"
+                ? (item.addedAt || 0)
+                : ((item.mtime ? item.mtime * 1000 : 0) || item.addedAt || 0);
+            return _timeBucket(ts);
+        }
+        case "tag": {
+            const t = (item.tags && item.tags[0]) || "";
+            return t ? `#${t}` : "(태그 없음)";
+        }
+        case "name":
+        default:
+            return null;
+    }
+}
+
+function _timeBucket(ts) {
+    if (!ts) return "(날짜 없음)";
+    const now = new Date();
+    const d = new Date(ts);
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const dDay = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    const diffDays = Math.floor((today - dDay) / 86400000);
+    if (diffDays < 0) return "미래";
+    if (diffDays === 0) return "오늘";
+    if (diffDays === 1) return "어제";
+    if (diffDays < 7) return "이번 주";
+    if (diffDays < 14) return "지난 주";
+    if (diffDays < 30) return "이번 달";
+    if (diffDays < 60) return "지난 달";
+    if (now.getFullYear() === d.getFullYear()) return "올해";
+    return `${d.getFullYear()}년`;
 }
 
 function _refreshSortUI() {

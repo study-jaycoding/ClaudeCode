@@ -5,24 +5,14 @@ export async function fetchModels() {
     return res.json();
 }
 
-export async function fetchProjects() {
-    const res = await fetch("/api/projects");
-    return res.json();
-}
-
 export async function fetchBalance() {
     const res = await fetch("/api/sp/balance");
     return res.json();
 }
 
-export async function fetchFavorites() {
-    const res = await fetch("/api/favorites");
-    return res.json();
-}
-
-export async function fetchJobStatus(jobId) {
-    const res = await fetch(`/api/sp/jobs/${jobId}`);
-    if (!res.ok) throw new Error(`job status ${res.status}`);
+export async function fetchFavorites(project) {
+    const q = project ? "?project=" + encodeURIComponent(project) : "";
+    const res = await fetch("/api/favorites" + q);
     return res.json();
 }
 

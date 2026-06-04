@@ -11,6 +11,7 @@ import {
     activeTab,
     currentProject,
     setSuppressClickUntil,
+    setLastFocusArea,
 } from "./state.js";
 import { rootTree } from "./state.js";
 import {
@@ -23,6 +24,7 @@ import {
 import { apiGetFavorites, apiPersistFavorites } from "./api.js";
 import { openLightbox } from "./lightbox.js";
 import { pushUndo } from "./undo.js";
+import { reapplyPanelSearch } from "./panel-search.js";
 
 // --- 외부 callback (다른 모듈에서 등록) ---
 let _previewNode = () => {};
@@ -35,11 +37,116 @@ export function setSourceGridCallback(fn) {
     _refreshSourceGrid = typeof fn === "function" ? fn : () => {};
 }
 
+// ── 인덱스 (lookup 최적화) ──
+// favorites 가 mutate 될 때마다 rebuildFavIndex() 가 호출되어 동기화됨.
+const _favByKey = new Map();          // "project|path" → fav
+const _favById = new Map();           // fav.id → fav
+const _derivedByFavId = new Map();    // sourceId → 자식 fav[] (역참조)
+
+function _key(project, path) { return project + "|" + path; }
+
+export function rebuildFavIndex() {
+    _favByKey.clear();
+    _favById.clear();
+    _derivedByFavId.clear();
+    for (const f of favorites) {
+        if (f && f.project && f.path) _favByKey.set(_key(f.project, f.path), f);
+        if (f && f.id) _favById.set(f.id, f);
+        for (const sid of (f && f.sourceIds) || []) {
+            let arr = _derivedByFavId.get(sid);
+            if (!arr) { arr = []; _derivedByFavId.set(sid, arr); }
+            arr.push(f);
+        }
+    }
+}
+
+export function getFavById(id) { return _favById.get(id); }
+export function getDerivedOf(favId) { return _derivedByFavId.get(favId) || []; }
+
 // ── 사이드바 소스 목록 선택 상태 ──
 const _favSelected = new Set();
 let _lastSelectedFavId = null;
+// shift+화살표 / shift-click range 시작점. 단일 선택 시 null 로 리셋.
+let _shiftAnchorFavId = null;
 
 export function getSelectedFavIds() { return Array.from(_favSelected); }
+
+/** 즐겨찾기 패널에서 방향(±1) 으로 한 칸 이동. shift=true 면 anchor~target range 다중 선택. */
+export function moveFavoritesFocus(direction, shift) {
+    if (!favoritesList) return;
+    const items = Array.from(favoritesList.querySelectorAll(".fav-item"))
+        .filter((el) => el.offsetParent && el.dataset.favId);
+    if (items.length === 0) return;
+    const ids = items.map((el) => el.dataset.favId);
+    let idx = _lastSelectedFavId ? ids.indexOf(_lastSelectedFavId) : -1;
+    let next;
+    if (idx === -1) {
+        next = direction > 0 ? 0 : items.length - 1;
+    } else {
+        next = Math.max(0, Math.min(items.length - 1, idx + direction));
+    }
+    const target = items[next];
+    if (!target) return;
+    setLastFocusArea("favorites");
+
+    if (!shift) {
+        // 단일 이동 — 기존 click 핸들러 그대로 사용 (anchor 리셋 / NEW dismiss / 그리드 미러)
+        _shiftAnchorFavId = null;
+        target.click();
+        target.scrollIntoView({ block: "nearest" });
+        return;
+    }
+
+    // shift+화살표 — anchor~target range (replace), focus 만 갱신, anchor 유지
+    if (!_shiftAnchorFavId || ids.indexOf(_shiftAnchorFavId) === -1) {
+        _shiftAnchorFavId = _lastSelectedFavId || target.dataset.favId;
+    }
+    const a = ids.indexOf(_shiftAnchorFavId);
+    const b = ids.indexOf(target.dataset.favId);
+    _favSelected.clear();
+    if (a >= 0 && b >= 0) {
+        const [lo, hi] = a < b ? [a, b] : [b, a];
+        for (let i = lo; i <= hi; i++) _favSelected.add(ids[i]);
+    }
+    _lastSelectedFavId = target.dataset.favId;
+
+    favoritesList.querySelectorAll(".fav-item").forEach((el) => {
+        el.classList.toggle("selected", _favSelected.has(el.dataset.favId));
+    });
+    _mirrorFavSelectionToGrid();
+
+    // 새로 선택된 fav 들의 NEW 도 dismiss (단일 클릭과 일관)
+    let dirty = false;
+    for (const f of favorites) {
+        if (_favSelected.has(f.id) && markCardSeen(f.project, f.path)) dirty = true;
+    }
+    if (dirty) {
+        updateFavCount();
+        updateCardNewBadges();
+        updateTreeLabelColors();
+        // re-render 시 target DOM 이 교체되므로 새 element 찾아서 scroll
+        renderFavoritesItems();
+        const refreshed = favoritesList.querySelector(
+            `.fav-item[data-fav-id="${target.dataset.favId}"]`
+        );
+        if (refreshed) refreshed.scrollIntoView({ block: "nearest" });
+        return;
+    }
+    target.scrollIntoView({ block: "nearest" });
+}
+
+/** 사이드바 _favSelected 의 fav 들을 우측 그리드 카드의 .selected 와 동기화.
+ *  좌측에서 선택 변경할 때마다 호출. (그리드→사이드바 역방향은 별개 흐름) */
+function _mirrorFavSelectionToGrid() {
+    const paths = new Set();
+    for (const id of _favSelected) {
+        const f = _favById.get(id);
+        if (f && f.project === currentProject) paths.add(f.path);
+    }
+    document.querySelectorAll(".preview-content .card[data-path]").forEach((card) => {
+        card.classList.toggle("selected", paths.has(card.dataset.path));
+    });
+}
 
 export function clearFavSelection() {
     _favSelected.clear();
@@ -48,6 +155,7 @@ export function clearFavSelection() {
         favoritesList.querySelectorAll(".fav-item.selected")
             .forEach((el) => el.classList.remove("selected"));
     }
+    _mirrorFavSelectionToGrid();
 }
 
 // 여러 fav 에 같은 태그를 한 번에 추가 (개별 addTag 호출은 매번 re-render 하므로 부적합).
@@ -56,7 +164,7 @@ export function addTagsToMany(favIds, tag) {
     if (!tag) return;
     const added = [];
     for (const fid of favIds) {
-        const fav = favorites.find((f) => f.id === fid);
+        const fav = _favById.get(fid);
         if (!fav || (fav.tags || []).includes(tag)) continue;
         fav.tags = fav.tags || [];
         fav.tags.push(tag);
@@ -65,25 +173,30 @@ export function addTagsToMany(favIds, tag) {
     if (added.length === 0) return;
     persistFavorites();
     renderFavorites();
+    renderTagFilterBar();
+    if (activeTab === "favorites") _refreshSourceGrid(activeTagFilter);
     pushUndo(`태그 추가 #${tag} (${added.length}개)`, async () => {
         for (const fid of added) {
-            const f = favorites.find((x) => x.id === fid);
+            const f = _favById.get(fid);
             if (f) f.tags = (f.tags || []).filter((t) => t !== tag);
         }
         persistFavorites();
         renderFavorites();
+        renderTagFilterBar();
+        if (activeTab === "favorites") _refreshSourceGrid(activeTagFilter);
     });
 }
 
 // --- 분류 / 조회 ---
 export function isFavorite(project, path) {
-    return favorites.some((f) => f.project === project && f.path === path);
+    return _favByKey.has(_key(project, path));
 }
 export function getFavorite(project, path) {
-    return favorites.find((f) => f.project === project && f.path === path);
+    return _favByKey.get(_key(project, path));
 }
+// 사용자가 isSource = true 로 토글한 항목 (생성물이어도 가능).
 export function isSourceFav(fav) {
-    return fav && fav.isSource === true && !isGeneratedPath(fav.path);
+    return fav && fav.isSource === true;
 }
 // 현재 viewer 에서 선택된 프로젝트의 소스만 반환.
 // 프로젝트 미선택 시 빈 배열 — 소스 탭/사이드바 모두에 자동 적용됨.
@@ -93,13 +206,33 @@ export function sourceFavorites() {
 }
 
 // --- CRUD ---
+// persist 직렬화 — 짧은 간격의 연속 mutation (push + markCardSeen 등) 이
+// 동시에 POST 되어 서버에 도착 순서가 뒤바뀌면, 옛 스냅샷이 마지막에 쓰여
+// 방금 갱신한 seenAt/sourceMarkedAt 이 사라지는 race 가 발생함. queue 로 순차화.
+let _persistChain = Promise.resolve();
+let _lastPersistAt = 0;
 export function persistFavorites() {
-    apiPersistFavorites(favorites);
+    // 어떤 mutation 후든 항상 호출되므로 여기서 인덱스 재동기화
+    rebuildFavIndex();
+    _lastPersistAt = Date.now();
+    // 프로젝트별 분리 — 현재 프로젝트의 favorites 만 저장 (현재 메모리는 그 프로젝트만 보유)
+    const proj = currentProject;
+    if (!proj) return;  // 프로젝트 없으면 저장 안 함 (data lost 방지)
+    const projFavs = favorites.filter((f) => f.project === proj);
+    _persistChain = _persistChain
+        .then(() => apiPersistFavorites(proj, projFavs))
+        .catch(() => {});
+}
+// SSE callback 에서 사용 — 자기 자신이 방금 쓴 변경으로 발화된 SSE 는 무시.
+// 1.5s 안에 다른 클라이언트의 변경이 끼면 그건 다음 SSE tick (≤1s) 에서 잡힘.
+export function isOwnPersistRecent() {
+    return Date.now() - _lastPersistAt < 1500;
 }
 
 export async function initFavorites() {
     try {
-        const data = await apiGetFavorites();
+        // 현재 프로젝트의 favorites 만 로드. 프로젝트 없으면 모든 프로젝트 통합 (UI 가 일관되게 한 번에 표시).
+        const data = await apiGetFavorites(currentProject || "");
         setFavorites(Array.isArray(data.favorites) ? data.favorites
                   : Array.isArray(data) ? data : []);
         let needPersist = false;
@@ -122,14 +255,19 @@ export async function initFavorites() {
             }
         }
         if (needPersist) persistFavorites();
+        rebuildFavIndex();
         setFirstFavoritesLoad(false);
     } catch {
         setFavorites([]);
+        rebuildFavIndex();
     }
     updateFavCount();
     updateTreeLabelColors();
     updateCardMarkers();
     updateCardNewBadges();
+    // viewerFavorites 가 교체됐음을 외부에 알림 — spotlight cache 동기화 등.
+    // 프로젝트 전환 직후 호출되는 경우 spotlight 가 stale cache 로 필터링하는 버그 방지.
+    try { window.dispatchEvent(new CustomEvent("pv:favorites-changed")); } catch {}
 }
 
 /** 즐겨찾기 패널의 ● 버튼: 완전 제거 (ID 파기). */
@@ -145,7 +283,7 @@ export function removeFromFavorites(project, path) {
 // --- 소스 토글 ---
 /** 내부: isSource 명시 set + UI 갱신. 미등록이면 신규 생성. */
 export function _setSourceValue(project, path, value) {
-    let fav = favorites.find((f) => f.project === project && f.path === path);
+    let fav = _favByKey.get(_key(project, path));
     const now = Date.now();
     if (!fav) {
         fav = {
@@ -171,12 +309,16 @@ export function _setSourceValue(project, path, value) {
     updateCardMarkers();
     updateTreeLabelColors();
     updateCardNewBadges();
+    // 소스 탭에 있는 상태에서 토글한 경우 그리드 자체가 바뀌어야 함 (소스 추가/해제 → 카드 표시/숨김).
+    if (activeTab === "favorites") _refreshSourceGrid(activeTagFilter);
+    // spotlight 도 자기 cache.favorites 를 즉시 갱신해야 — SSE round-trip 기다리면
+    // 사용자가 토글 직후 바로 drag 할 때 isSource 판정이 빗나감.
+    try { window.dispatchEvent(new CustomEvent("pv:favorites-changed")); } catch {}
 }
 
-/** 카드 우상단 마커 클릭 — Result/ 외에서 isSource 토글. */
+/** 카드 우상단 마커 클릭 — isSource 토글 (생성물/일반 모두 가능). */
 export function toggleSource(project, path) {
-    if (isGeneratedPath(path)) return;
-    const fav = favorites.find((f) => f.project === project && f.path === path);
+    const fav = _favByKey.get(_key(project, path));
     const prev = !!(fav && fav.isSource === true);
     _setSourceValue(project, path, !prev);
     const name = path.split("/").pop();
@@ -189,27 +331,46 @@ export function toggleSource(project, path) {
 function _isUnseen(f, trigger) {
     return !(f.seenAt && f.seenAt >= trigger);
 }
-export function unseenSourcesCount() {
-    return favorites.filter((f) => {
-        if (!isSourceFav(f)) return false;
-        const trig = f.sourceMarkedAt || f.addedAt || 0;
-        return _isUnseen(f, trig);
-    }).length;
+// fav 가 "다시 NEW 가 되어야 하는 가장 최근 사건" 의 시각.
+// - source 토글된 경우: sourceMarkedAt 우선 (생성물이어도 source 로 새로 표시했으니 NEW).
+// - 생성물(Result/) 이지만 source 아님: addedAt 기준 (자동 생성 알림).
+// - 둘 다 아님: 알림 대상 아님.
+// 세 함수 (isCardNew / markCardSeen / unseenSourcesCount) 가 모두 이 헬퍼 사용 → 어긋남 방지.
+function _seenTriggerOf(fav) {
+    if (isSourceFav(fav)) return fav.sourceMarkedAt || fav.addedAt || 0;
+    if (isGeneratedPath(fav.path)) return fav.addedAt || 0;
+    return 0;
 }
+// 카운트는 그리드(=현재 프로젝트) 와 동일한 범위 + badge 와 같은 _favByKey 를
+// 순회해 같은 fav 객체를 본다. 두 source 가 분리되면 count↔badge 가 어긋날 수 있음.
+export function unseenSourcesCount() {
+    if (!currentProject) return 0;
+    let n = 0;
+    for (const f of _favByKey.values()) {
+        if (f.project !== currentProject) continue;
+        if (!isSourceFav(f)) continue;
+        if (_isUnseen(f, _seenTriggerOf(f))) n++;
+    }
+    return n;
+}
+// 생성 탭의 ✨ 배지 — source 토글 여부와 무관하게 "Result/ 의 새 생성물" 알림.
 export function unseenGeneratedCount() {
-    return favorites.filter((f) => {
-        if (!isGeneratedPath(f.path)) return false;
-        return _isUnseen(f, f.addedAt || 0);
-    }).length;
+    if (!currentProject) return 0;
+    let n = 0;
+    for (const f of _favByKey.values()) {
+        if (f.project !== currentProject) continue;
+        if (!isGeneratedPath(f.path)) continue;
+        if (_isUnseen(f, f.addedAt || 0)) n++;
+    }
+    return n;
 }
 
 /** 카드를 본 것으로 마킹. true 반환 시 UI 갱신 필요. */
 export function markCardSeen(project, path) {
-    const fav = favorites.find((f) => f.project === project && f.path === path);
+    const fav = _favByKey.get(_key(project, path));
     if (!fav) return false;
-    const trig = isGeneratedPath(path)
-        ? (fav.addedAt || 0)
-        : (fav.sourceMarkedAt || fav.addedAt || 0);
+    const trig = _seenTriggerOf(fav);
+    if (trig === 0) return false;
     if (fav.seenAt && fav.seenAt >= trig) return false;
     fav.seenAt = Date.now();
     persistFavorites();
@@ -218,15 +379,45 @@ export function markCardSeen(project, path) {
 
 /** 카드가 "새 항목" 표시 대상인지 — seenAt 이 마지막 trigger 이전이거나 미정의일 때. */
 export function isCardNew(project, path) {
-    const fav = favorites.find((f) => f.project === project && f.path === path);
+    const fav = _favByKey.get(_key(project, path));
     if (!fav) return false;
-    if (isGeneratedPath(path)) {
-        return _isUnseen(fav, fav.addedAt || 0);
+    const trig = _seenTriggerOf(fav);
+    if (trig === 0) return false;
+    return _isUnseen(fav, trig);
+}
+
+// 생성 탭 배지의 running 상태 — queue.js 가 setRunningCount 로 주입.
+let _runningCount = 0;
+export function setRunningCount(n) {
+    _runningCount = Math.max(0, Number(n) || 0);
+    updateGenBadge();
+}
+
+/** 생성 탭 아이콘 배지.
+ *  running & unseen 둘 다 있으면 분할 알약 [녹|파], 하나만 있으면 단색.
+ *  녹색 = 진행중, 파랑 = 확인 대기 NEW. */
+export function updateGenBadge() {
+    if (!genCountEl) return;
+    const r = _runningCount;
+    const u = unseenGeneratedCount();
+    genCountEl.classList.remove("running", "unseen", "split");
+    if (r > 0 && u > 0) {
+        genCountEl.classList.remove("hidden");
+        genCountEl.classList.add("split");
+        genCountEl.innerHTML =
+            `<span class="gc-run">${r}</span><span class="gc-new">${u}</span>`;
+    } else if (r > 0) {
+        genCountEl.classList.remove("hidden");
+        genCountEl.classList.add("running");
+        genCountEl.textContent = String(r);
+    } else if (u > 0) {
+        genCountEl.classList.remove("hidden");
+        genCountEl.classList.add("unseen");
+        genCountEl.textContent = String(u);
+    } else {
+        genCountEl.classList.add("hidden");
+        genCountEl.textContent = "";
     }
-    if (isSourceFav(fav)) {
-        return _isUnseen(fav, fav.sourceMarkedAt || fav.addedAt || 0);
-    }
-    return false;
 }
 
 // --- UI 갱신 (다른 모듈도 호출) ---
@@ -234,47 +425,78 @@ export function updateFavCount() {
     const srcN = unseenSourcesCount();
     favCountEl.textContent = String(srcN);
     favCountEl.classList.toggle("hidden", srcN === 0);
-
-    if (genCountEl) {
-        const genN = unseenGeneratedCount();
-        genCountEl.textContent = String(genN);
-        genCountEl.classList.toggle("hidden", genN === 0);
-    }
+    updateGenBadge();
 }
 
-/** 트리 라벨에 source/generated 클래스 동기화. */
+/** 현재 프로젝트에서 자손 중 unseen fav 가 하나라도 있는 폴더 path 들 집합. */
+function getDirsWithNewDescendants() {
+    const newDirs = new Set();
+    if (!currentProject) return newDirs;
+    for (const f of _favByKey.values()) {
+        if (f.project !== currentProject) continue;
+        if (!isCardNew(f.project, f.path)) continue;
+        const segs = (f.path || "").split("/");
+        let acc = "";
+        for (let i = 0; i < segs.length - 1; i++) {
+            acc = acc ? `${acc}/${segs[i]}` : segs[i];
+            newDirs.add(acc);
+        }
+    }
+    return newDirs;
+}
+
+/** 트리 라벨에 source/generated/is-new 클래스 동기화.
+ *  file-label 은 자기 자신이 NEW 이면 is-new. dir-label 은 그 폴더 아래
+ *  어딘가에 unseen fav 가 있으면 is-new (폴더 닫혀있어도 안에 새것 있다는 신호). */
 export function updateTreeLabelColors() {
     document.querySelectorAll(".tree .file-label[data-path]").forEach((label) => {
         const path = label.dataset.path;
         const isGen = isGeneratedPath(path);
-        const fav = favorites.find((f) => f.project === currentProject && f.path === path);
+        const fav = _favByKey.get(_key(currentProject, path));
         const isSrc = !!(fav && fav.isSource === true);
+        const isNew = isCardNew(currentProject, path);
         label.classList.toggle("generated", isGen);
-        label.classList.toggle("source", isSrc && !isGen);
+        label.classList.toggle("source", isSrc);
+        label.classList.toggle("is-new", isNew);
+    });
+    const newDirs = getDirsWithNewDescendants();
+    document.querySelectorAll(".tree .dir-label[data-path]").forEach((label) => {
+        label.classList.toggle("is-new", newDirs.has(label.dataset.path));
     });
 }
 
-/** 그리드 카드 우상단 마커 갱신 (생성물/소스/중립). */
+/** 그리드 카드 우상단 마커 갱신.
+ *  - 생성물(Result/): 파란 점
+ *  - 소스 토글됨: 녹색 점
+ *  - 생성물 + 소스: 파란 점 + 녹색 링 (`generated source` 양쪽 class)
+ *  - 그 외: 투명한 중립 점
+ */
 export function updateCardMarkers() {
     document.querySelectorAll(".card .card-marker[data-path]").forEach((btn) => {
         const path = btn.dataset.path;
-        if (isGeneratedPath(path)) {
-            btn.className = "card-marker generated";
-            btn.title = "자동 생성물 (Result/)";
-            return;
-        }
-        const fav = favorites.find((f) => f.project === currentProject && f.path === path);
+        const isGen = isGeneratedPath(path);
+        const fav = _favByKey.get(_key(currentProject, path));
         const isSrc = !!(fav && fav.isSource === true);
-        btn.className = "card-marker " + (isSrc ? "source" : "neutral");
-        btn.title = isSrc ? "소스 해제" : "소스로 표시";
+        const cls = ["card-marker"];
+        if (isGen) cls.push("generated");
+        if (isSrc) cls.push("source");
+        if (!isGen && !isSrc) cls.push("neutral");
+        btn.className = cls.join(" ");
+        btn.title = isSrc
+            ? (isGen ? "소스 해제 (생성물 + 소스)" : "소스 해제")
+            : (isGen ? "소스로 표시 (생성물)" : "소스로 표시");
     });
 }
 
-/** 그리드 카드 NEW 배지 갱신 (좌상단 라임 배지). */
+/** 그리드 카드 NEW 배지 갱신 (좌상단 라임 배지).
+ *  파일 카드 = 자기 자신이 unseen 이면 NEW.
+ *  폴더 카드 = 자손 중 unseen fav 가 하나라도 있으면 NEW (안에 새것 있다는 신호). */
 export function updateCardNewBadges() {
+    const newDirs = getDirsWithNewDescendants();
     document.querySelectorAll(".card[data-path]").forEach((card) => {
         const path = card.dataset.path;
-        const isNew = isCardNew(currentProject, path);
+        const isDir = card.classList.contains("card-dir");
+        const isNew = isDir ? newDirs.has(path) : isCardNew(currentProject, path);
         card.classList.toggle("is-new", isNew);
         const existing = card.querySelector(".new-badge");
         if (isNew && !existing) {
@@ -289,36 +511,71 @@ export function updateCardNewBadges() {
 }
 
 // --- 태그 관리 ---
+// 사이드바(renderFavorites) + 태그 필터 바 + 우측 소스 그리드 모두 갱신해야
+// 추가/제거가 양쪽에 즉시 반영된다. (이전엔 renderFavorites 만 호출 → 우측은 F5 필요)
+function _refreshAfterTagChange() {
+    persistFavorites();
+    renderFavorites();
+    renderTagFilterBar();
+    if (activeTab === "favorites") _refreshSourceGrid(activeTagFilter);
+}
+
 export function addTag(favId, tag) {
-    const fav = favorites.find((f) => f.id === favId);
+    const fav = _favById.get(favId);
     if (!fav) return;
     tag = tag.trim();
     if (!tag || fav.tags.includes(tag)) return;
     fav.tags.push(tag);
-    persistFavorites();
-    renderFavorites();
+    _refreshAfterTagChange();
     pushUndo(`태그 추가 (#${tag})`, async () => {
-        const f = favorites.find((x) => x.id === favId);
+        const f = _favById.get(favId);
         if (!f) return;
         f.tags = f.tags.filter((t) => t !== tag);
-        persistFavorites();
-        renderFavorites();
+        _refreshAfterTagChange();
     });
 }
 
 export function removeTag(favId, tag) {
-    const fav = favorites.find((f) => f.id === favId);
+    const fav = _favById.get(favId);
     if (!fav) return;
     if (!fav.tags.includes(tag)) return;
     fav.tags = fav.tags.filter((t) => t !== tag);
-    persistFavorites();
-    renderFavorites();
+    _refreshAfterTagChange();
     pushUndo(`태그 제거 (#${tag})`, async () => {
-        const f = favorites.find((x) => x.id === favId);
+        const f = _favById.get(favId);
         if (!f || f.tags.includes(tag)) return;
         f.tags.push(tag);
-        persistFavorites();
-        renderFavorites();
+        _refreshAfterTagChange();
+    });
+}
+
+// 태그 입력창에 인라인 자동완성 부착.
+// 사용자가 "ㄱ" 입력 → 기존 태그 "공구" 가 있으면 input 에 "공구" 채우고 "구" 부분만 selection.
+// 다음 글자 입력하면 그 selection 이 덮어쓰여 새 입력으로 갱신.
+export function attachTagAutocomplete(input) {
+    let composing = false;
+    const tryComplete = () => {
+        const cursor = input.selectionStart;
+        const typed = input.value.substring(0, cursor);
+        if (!typed) return;
+        const lower = typed.toLowerCase();
+        const match = getAllTags().find((t) => t !== typed && t.toLowerCase().startsWith(lower));
+        if (match) {
+            input.value = match;
+            input.setSelectionRange(typed.length, match.length);
+        }
+    };
+    input.addEventListener("input", (e) => {
+        if (composing) return;
+        // 사용자가 직접 입력한 경우만 (backspace/delete 등은 무시)
+        const t = e.inputType;
+        if (t && t !== "insertText" && t !== "insertCompositionText") return;
+        tryComplete();
+    });
+    input.addEventListener("compositionstart", () => { composing = true; });
+    input.addEventListener("compositionend", () => {
+        composing = false;
+        tryComplete();
     });
 }
 
@@ -329,23 +586,17 @@ export function getAllTags() {
 }
 
 // --- 태그 필터 바 ---
-export function renderTagFilterBar() {
+// 두 위치에 동일 콘텐츠 렌더:
+//   1) 사이드바 #tag-filter-bar
+//   2) 우측 소스 그리드 상단 #source-tag-filter-bar (showSourceGrid 가 만듦)
+function _renderTagFilterInto(target) {
+    if (!target) return;
     const tags = getAllTags();
     const sources = sourceFavorites();
-    tagFilterBar.innerHTML = "";
+    target.innerHTML = "";
     if (tags.length === 0 && sources.length === 0) return;
 
-    const allChip = document.createElement("button");
-    allChip.type = "button";
-    allChip.className = "tag-chip" + (activeTagFilter === null ? " active" : "");
-    allChip.textContent = `전체 (${sources.length})`;
-    allChip.addEventListener("click", () => {
-        setActiveTagFilter(null);
-        renderTagFilterBar();
-        renderFavoritesItems();
-        _refreshSourceGrid(null);
-    });
-    tagFilterBar.appendChild(allChip);
+    // "전체" 칩 제거 — 태그 미선택 = 전체 표시. 같은 태그 다시 클릭 = 해제 (line 아래 토글 로직).
 
     tags.forEach((tag) => {
         const count = sources.filter((f) => (f.tags || []).includes(tag)).length;
@@ -364,8 +615,14 @@ export function renderTagFilterBar() {
             e.stopPropagation();
             removeTagFromAll(tag);
         });
-        tagFilterBar.appendChild(chip);
+        target.appendChild(chip);
     });
+}
+
+export function renderTagFilterBar() {
+    _renderTagFilterInto(tagFilterBar);
+    // 우측 그리드 영역(있다면)도 함께 갱신
+    _renderTagFilterInto(document.getElementById("source-tag-filter-bar"));
 }
 
 // 태그를 모든 source favorite 에서 영구 제거 (확인 후) + undo.
@@ -384,7 +641,7 @@ export function removeTagFromAll(tag) {
     _refreshSourceGrid(activeTagFilter);
     pushUndo(`태그 #${tag} 일괄 제거 (${ids.length}개)`, async () => {
         for (const fid of ids) {
-            const f = favorites.find((x) => x.id === fid);
+            const f = _favById.get(fid);
             if (f && !(f.tags || []).includes(tag)) {
                 f.tags = f.tags || [];
                 f.tags.push(tag);
@@ -426,13 +683,18 @@ export function renderFavoritesItems() {
     for (const fav of filtered) {
         favoritesList.appendChild(renderFavItem(fav));
     }
+    // 리스트 재구성 후 검색 필터 다시 적용
+    reapplyPanelSearch();
 }
 
 function renderFavItem(fav) {
     const kind = kindFromPath(fav.path);
     const url = `/media?project=${encodeURIComponent(fav.project)}&path=${encodeURIComponent(fav.path)}`;
+    const isNew = isCardNew(fav.project, fav.path);
     const li = document.createElement("li");
-    li.className = "fav-item" + (_favSelected.has(fav.id) ? " selected" : "");
+    li.className = "fav-item"
+        + (_favSelected.has(fav.id) ? " selected" : "")
+        + (isNew ? " is-new" : "");
     li.dataset.favId = fav.id;
 
     let thumbHtml;
@@ -449,6 +711,7 @@ function renderFavItem(fav) {
         .join("");
 
     li.innerHTML = `
+        ${isNew ? `<span class="new-badge">NEW</span>` : ""}
         <div class="fav-thumb ${kind !== "image" && kind !== "video" ? "fav-thumb-other" : ""}">${thumbHtml}</div>
         <div class="fav-body">
             <div class="fav-info">
@@ -463,7 +726,22 @@ function renderFavItem(fav) {
         </div>
         <button class="fav-remove" type="button" title="소스 해제">●</button>`;
 
-    // 썸네일 클릭 → 라이트박스 (이미지/비디오) 또는 텍스트 미리보기
+    // 원본 파일이 삭제됐을 때 broken 썸네일 대신 "파일 없음" 표시
+    const fmedia = li.querySelector(".fav-thumb img, .fav-thumb video");
+    if (fmedia) {
+        const onErr = () => {
+            const wrap = li.querySelector(".fav-thumb");
+            if (!wrap || wrap.classList.contains("missing")) return;
+            wrap.classList.add("missing");
+            wrap.innerHTML = `<span class="fav-thumb-missing" title="원본 파일이 없습니다">⚠</span>`;
+        };
+        if (fmedia.tagName === "IMG" && fmedia.complete && fmedia.naturalWidth === 0) onErr();
+        else fmedia.addEventListener("error", onErr);
+    }
+
+    // 썸네일 클릭 → 라이트박스 (이미지/비디오) 또는 텍스트 미리보기 + NEW dismiss.
+    // (이전엔 spotlight 가 떠 있으면 skip 했으나, docked spotlight 는 항상 visible
+    //  이라 항상 skip 되어 lightbox 가 영원히 안 열렸음 — 원래 동작 복원.)
     li.querySelector(".fav-thumb").addEventListener("click", () => {
         const node = { name: fav.path.split("/").pop(), path: fav.path, kind, size: 0 };
         if (kind === "image" || kind === "video") {
@@ -471,6 +749,12 @@ function renderFavItem(fav) {
         } else if (rootTree && currentProject === fav.project) {
             const tn = findNodeByPath(rootTree, fav.path);
             if (tn) _previewNode(fav.project, tn);
+        }
+        if (markCardSeen(fav.project, fav.path)) {
+            updateFavCount();
+            updateCardNewBadges();
+            updateTreeLabelColors();
+            renderFavoritesItems();
         }
     });
 
@@ -496,6 +780,7 @@ function renderFavItem(fav) {
         input.maxLength = 20;
         tagsDiv.insertBefore(input, btn);
         input.focus();
+        attachTagAutocomplete(input);
 
         const commitTag = () => {
             const val = input.value.trim();
@@ -522,6 +807,8 @@ function renderFavItem(fav) {
         if (e.target.closest(".fav-remove")) return;
         if (e.target.closest(".tag-input")) return;
 
+        setLastFocusArea("favorites");
+
         if (e.ctrlKey || e.metaKey) {
             if (_favSelected.has(fav.id)) _favSelected.delete(fav.id);
             else _favSelected.add(fav.id);
@@ -543,32 +830,25 @@ function renderFavItem(fav) {
         favoritesList.querySelectorAll(".fav-item").forEach((el) => {
             el.classList.toggle("selected", _favSelected.has(el.dataset.favId));
         });
+        _mirrorFavSelectionToGrid();
+        // 본체 클릭으로도 NEW dismiss (그리드 카드와 동일 동작)
+        if (markCardSeen(fav.project, fav.path)) {
+            updateFavCount();
+            updateCardNewBadges();
+            updateTreeLabelColors();
+            renderFavoritesItems();
+        }
     });
 
     return li;
 }
 
-// ── 사이드바 소스 선택 + `/` 키로 일괄 태그 입력 ─────────────
+// ` (backtick) 키로 일괄 태그 입력 — 사이드바 fav-item 선택 또는 우측 그리드 card 선택 둘 다 처리.
 // favorites.js 모듈 로드 시 한 번 등록.
-document.addEventListener("keydown", (e) => {
-    // 입력 중이면 무시
-    const ae = document.activeElement;
-    if (ae && (["INPUT", "TEXTAREA"].includes(ae.tagName) || ae.isContentEditable)) return;
-
-    if (e.key === "Escape" && _favSelected.size > 0) {
-        clearFavSelection();
-        return;
-    }
-    if (e.key !== "/") return;
-    if (activeTab !== "favorites") return;
-    if (_favSelected.size === 0) return;
-
-    e.preventDefault();
-    const ids = Array.from(_favSelected);
-    const firstLi = favoritesList.querySelector(`.fav-item[data-fav-id="${CSS.escape(ids[0])}"]`);
-    if (!firstLi) return;
-    const tagsDiv = firstLi.querySelector(".fav-tags");
-    const btn = firstLi.querySelector(".tag-add-btn");
+function _openBatchTagInput(target, ids) {
+    if (!target || !ids || ids.length === 0) return;
+    const tagsDiv = target.querySelector(".fav-tags") || target.querySelector(".card-tags");
+    const btn = target.querySelector(".tag-add-btn");
     if (!tagsDiv || !btn) return;
     const existing = tagsDiv.querySelector(".tag-input");
     if (existing) { existing.focus(); return; }
@@ -580,21 +860,76 @@ document.addEventListener("keydown", (e) => {
     input.maxLength = 20;
     tagsDiv.insertBefore(input, btn);
     input.focus();
+    attachTagAutocomplete(input);
 
     let committed = false;
+    const cleanup = () => {
+        document.removeEventListener("mouseup", onOutsideMouseUp, true);
+    };
     const commit = () => {
         if (committed) return;
         committed = true;
+        cleanup();
         const val = input.value.trim();
         if (val) addTagsToMany(ids, val);
-        else input.remove();
+        if (input.parentNode) input.remove();
     };
+    // 외부 mouseup 감지 — drag 가 진행 중이면 mouseup 은 drop 직후에야 발화하므로
+    // commit→addTagsToMany→renderFavorites 가 dragstart 를 abort 시키지 않는다.
+    // (이전엔 mousedown capture 라 drag 첫 이벤트를 잡아 drag 가 깨졌음.)
+    const onOutsideMouseUp = (ev) => {
+        if (!input.isConnected) { cleanup(); return; }
+        if (input.contains(ev.target)) return;
+        commit();
+    };
+    setTimeout(() => document.addEventListener("mouseup", onOutsideMouseUp, true), 0);
+
     input.addEventListener("keydown", (ev) => {
         if (ev.key === "Enter") { ev.preventDefault(); commit(); }
-        else if (ev.key === "Escape") { committed = true; input.remove(); }
+        else if (ev.key === "Escape") { committed = true; cleanup(); input.remove(); }
         ev.stopPropagation();
     });
+    input.addEventListener("click", (ev) => ev.stopPropagation());
+    input.addEventListener("mousedown", (ev) => ev.stopPropagation());
     input.addEventListener("blur", commit);
+}
+
+document.addEventListener("keydown", (e) => {
+    // 입력 중이면 무시
+    const ae = document.activeElement;
+    if (ae && (["INPUT", "TEXTAREA"].includes(ae.tagName) || ae.isContentEditable)) return;
+
+    if (e.key === "Escape" && _favSelected.size > 0) {
+        clearFavSelection();
+        return;
+    }
+    if (e.key !== "`") return;
+    if (activeTab !== "favorites") return;
+
+    // 우선순위: 사이드바 fav-item 선택 → 우측 그리드 card 선택.
+    if (_favSelected.size > 0) {
+        e.preventDefault();
+        const ids = Array.from(_favSelected);
+        const firstLi = favoritesList.querySelector(`.fav-item[data-fav-id="${CSS.escape(ids[0])}"]`);
+        _openBatchTagInput(firstLi, ids);
+        return;
+    }
+
+    // 우측 그리드의 selected 카드들 — path → fav.id 변환
+    const selectedCards = document.querySelectorAll(".preview-content .card.selected[data-path]");
+    if (selectedCards.length === 0) return;
+    const ids = [];
+    let firstCard = null;
+    for (const card of selectedCards) {
+        const fav = _favByKey.get(_key(currentProject, card.dataset.path));
+        if (fav && fav.id) {
+            ids.push(fav.id);
+            if (!firstCard) firstCard = card;
+        }
+    }
+    if (ids.length === 0) return;
+    e.preventDefault();
+    _openBatchTagInput(firstCard, ids);
 });
 
 // 사이드바 소스 목록 바깥 클릭 시 선택 해제.
@@ -667,6 +1002,7 @@ document.addEventListener("mousemove", (e) => {
     lasso.style.width = w + "px";
     lasso.style.height = h + "px";
     _applyFavLassoSelection(x, y, w, h);
+    _mirrorFavSelectionToGrid();
 });
 
 document.addEventListener("mouseup", () => {

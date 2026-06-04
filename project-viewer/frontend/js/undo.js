@@ -3,7 +3,7 @@
 // 삭제는 의도적으로 제외 (실파일 변경이라 휴지통식 백업 없이는 위험)
 // =====================================================================
 import { undoStack } from "./state.js";
-import { previewInfo } from "./dom.js";
+import { showInfo, showOk, showError } from "./info-toast.js";
 
 const UNDO_MAX = 50;
 
@@ -17,14 +17,14 @@ export function pushUndo(label, undoFn) {
 export async function undoLast() {
     const entry = undoStack.pop();
     if (!entry) {
-        previewInfo.textContent = "↩ 되돌릴 작업이 없습니다";
+        showInfo("↩ 되돌릴 작업이 없습니다");
         return;
     }
-    previewInfo.textContent = `↩ 되돌리는 중: ${entry.label}...`;
+    showInfo(`↩ 되돌리는 중: ${entry.label}...`);
     try {
         await entry.fn();
-        previewInfo.textContent = `✓ 되돌렸습니다: ${entry.label}`;
+        showOk(`✓ 되돌렸습니다: ${entry.label}`);
     } catch (err) {
-        previewInfo.textContent = `⚠ 되돌리기 실패: ${err.message}`;
+        showError(`⚠ 되돌리기 실패: ${err.message}`);
     }
 }

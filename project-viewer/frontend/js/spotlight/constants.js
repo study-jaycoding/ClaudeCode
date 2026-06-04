@@ -21,5 +21,3 @@ export const PROVIDER_LETTERS = {
     xAI: "X",
     "Tongyi-MAI": "Z",
 };
-
-export const PROJECT_KEY = "spotlight.project";

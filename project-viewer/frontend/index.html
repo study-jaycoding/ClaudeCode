@@ -10,31 +10,54 @@
 <body>
     <header>
         <h1>Millionvolt Ai</h1>
+        <div id="info-toast" class="info-toast" aria-live="polite"></div>
         <div class="toolbar">
             <label for="project-select">프로젝트</label>
             <select id="project-select">
                 <option value="">(불러오는 중...)</option>
             </select>
-            <button id="refresh-btn" type="button" class="secondary">새로고침</button>
         </div>
     </header>
 
     <main class="layout">
         <aside class="sidebar">
-            <!-- 사이드바 탭: 구성 / 소스 / 생성 -->
+            <!-- 사이드바 탭: 구성 / 소스 / 생성 (세로 정렬 — ComfyUI 패턴) -->
             <div class="sidebar-tabs">
-                <button class="tab-btn active" type="button" data-tab="tree">📂 구성</button>
-                <button class="tab-btn" type="button" data-tab="favorites">🔗 소스 <span id="fav-count" class="fav-count hidden">0</span></button>
-                <button class="tab-btn" type="button" data-tab="generated">✨ 생성 <span id="gen-count" class="fav-count hidden">0</span></button>
+                <button class="tab-btn active" type="button" data-tab="tree" title="구성">
+                    <span class="tab-icon">📂</span>
+                    <span class="tab-label">구성</span>
+                </button>
+                <button class="tab-btn" type="button" data-tab="favorites" title="소스">
+                    <span class="tab-icon">🔗</span>
+                    <span class="tab-label">소스</span>
+                    <span id="fav-count" class="fav-count hidden">0</span>
+                </button>
+                <button class="tab-btn" type="button" data-tab="generated" title="생성">
+                    <span class="tab-icon">✨</span>
+                    <span class="tab-label">생성</span>
+                    <span id="gen-count" class="fav-count hidden">0</span>
+                </button>
+                <button class="tab-btn" type="button" data-tab="viewer" title="보기">
+                    <span class="tab-icon">🎞️</span>
+                    <span class="tab-label">보기</span>
+                </button>
             </div>
 
             <div class="tab-panel" id="tab-tree">
+                <div class="panel-search">
+                    <span class="panel-search-icon">🔍</span>
+                    <input type="search" class="panel-search-input" data-target="tree" placeholder="파일 검색..." />
+                </div>
                 <ul id="file-tree" class="tree">
                     <li class="empty">프로젝트를 선택하세요</li>
                 </ul>
             </div>
 
             <div class="tab-panel hidden" id="tab-favorites">
+                <div class="panel-search">
+                    <span class="panel-search-icon">🔍</span>
+                    <input type="search" class="panel-search-input" data-target="favorites" placeholder="소스 검색..." />
+                </div>
                 <div id="tag-filter-bar" class="tag-filter-bar"></div>
                 <ul id="favorites-list" class="favorites">
                     <li class="empty">즐겨찾기가 비어 있습니다</li>
@@ -42,13 +65,45 @@
             </div>
 
             <div class="tab-panel hidden" id="tab-generated">
-                <div class="generated-hint">스포트라이트에서 생성한 결과가<br/><code>Result/</code> 폴더로 자동 저장됩니다.<br/><small>폴더/파일 우클릭으로 새 폴더 생성·삭제</small></div>
-                <ul id="gen-tree" class="tree"></ul>
+                <div class="panel-search">
+                    <span class="panel-search-icon">🔍</span>
+                    <input type="search" class="panel-search-input" data-target="generated" placeholder="작업 검색..." />
+                </div>
+                <div class="queue-header">
+                    <div class="queue-filter-tabs" id="generated-filter-tabs" role="tablist">
+                        <button type="button" class="queue-filter-tab active" data-filter="all" role="tab">전체 <span class="queue-filter-count"></span></button>
+                        <button type="button" class="queue-filter-tab" data-filter="completed" role="tab">완료 <span class="queue-filter-count"></span></button>
+                        <button type="button" class="queue-filter-tab" data-filter="failed" role="tab">실패 <span class="queue-filter-count"></span></button>
+                    </div>
+                    <button class="queue-clear" type="button" id="generated-clear-btn" title="완료/실패 항목 모두 삭제">완료 비우기</button>
+                </div>
+                <!-- 진행 중인 spotlight 작업 strip (running 인 job 있을 때만 표시) -->
+                <ul id="generated-running-strip" class="generated-running-strip hidden"></ul>
+                <!-- 완료/실패한 batch 들을 큐와 동일한 카드 형식으로 표시 -->
+                <ul id="generated-jobs-list" class="queue-list">
+                    <li class="empty">아직 생성된 결과가 없습니다</li>
+                </ul>
             </div>
+
+            <div class="tab-panel hidden" id="tab-viewer">
+                <div class="viewer-track-header">
+                    <span class="viewer-track-title">트랙</span>
+                    <button class="viewer-track-add" type="button" id="viewer-add-btn" title="항목 추가">+ 추가</button>
+                </div>
+                <ul id="viewer-track-list" class="viewer-track-list">
+                    <li class="empty">+ 버튼을 눌러 항목 추가</li>
+                </ul>
+                <div class="viewer-track-footer">
+                    <span class="viewer-track-total" id="viewer-track-total">0:00 · 0개</span>
+                    <button class="viewer-track-clear" type="button" id="viewer-clear-btn" title="트랙 전체 비우기">비우기</button>
+                </div>
+            </div>
+
+            <!-- 사이드바 우측 가장자리 resize handle -->
+            <div class="sidebar-resize-handle" title="드래그하여 너비 조절"></div>
         </aside>
 
         <section class="preview">
-            <div id="preview-info" class="preview-info">프로젝트를 선택하거나 파일을 끌어다 놓으세요</div>
             <div class="view-controls">
                 <label class="size-control">
                     <span class="size-label">크기</span>
@@ -72,7 +127,54 @@
                     <button id="sort-dir-btn" class="view-btn sort-dir-btn" type="button" title="오름/내림 차순">↑</button>
                 </div>
             </div>
+            <div id="preview-info" class="preview-info">프로젝트를 선택하거나 파일을 끌어다 놓으세요</div>
             <div id="preview-content" class="preview-content"></div>
+
+            <!-- 보기 모드에서 상단 그리드 ↔ 하단 stage 비율 조절 핸들 (그 외 모드에선 hidden) -->
+            <div id="viewer-splitter" class="viewer-splitter" title="드래그하여 위/아래 비율 조절"></div>
+
+            <!-- 보기 탭 전용 stage — 활성일 때만 표시. 그 외 탭이면 hidden. -->
+            <div id="viewer-stage" class="viewer-stage hidden">
+                <div class="viewer-screen" id="viewer-screen">
+                    <!-- 이중 영상 슬롯 (A/B) + 이미지 — 미리 로드해 클립 사이 끊김 제거. -->
+                    <video id="viewer-v0" class="viewer-media" preload="auto"></video>
+                    <video id="viewer-v1" class="viewer-media" preload="auto"></video>
+                    <img id="viewer-img" class="viewer-media" alt="" />
+                    <div class="viewer-screen-empty" id="viewer-screen-empty">트랙에 항목을 추가하세요</div>
+                </div>
+                <!-- 표준 비디오 컨트롤 — YouTube/Vimeo 스타일 한 줄 -->
+                <div class="viewer-controls">
+                    <button class="vc-btn" id="viewer-prev-btn" type="button" title="이전 클립 (←)">⏮</button>
+                    <button class="vc-btn vc-play" id="viewer-play-btn" type="button" title="재생/일시정지 (Space)" aria-label="재생/일시정지">
+                        <svg class="vc-icon-play" viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+                            <path d="M8 5v14l11-7z"/>
+                        </svg>
+                        <svg class="vc-icon-pause" viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+                            <path d="M6 5h4v14H6zm8 0h4v14h-4z"/>
+                        </svg>
+                    </button>
+                    <button class="vc-btn" id="viewer-next-btn" type="button" title="다음 클립 (→)">⏭</button>
+                    <!-- scrub bar — flex-grow 로 남는 공간 채움. click/drag 자유 시크. -->
+                    <div class="vsb-track" id="viewer-scrubbar" title="클릭/드래그 = 시크">
+                        <div class="vsb-fill" id="viewer-scrubbar-fill"></div>
+                        <div class="vsb-head" id="viewer-scrubbar-head"></div>
+                    </div>
+                    <span class="vc-time">
+                        <span id="viewer-time-cur">0:00</span> / <span id="viewer-time-total">0:00</span>
+                    </span>
+                    <button class="vc-btn vc-loop" id="viewer-loop-btn" type="button" title="반복 재생 끄기/켜기" aria-label="반복 재생">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+                            <path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/>
+                        </svg>
+                    </button>
+                    <button class="vc-btn vc-vol" id="viewer-vol-btn" type="button" title="음소거 (M)">🔊</button>
+                    <input class="vc-vol-slider" id="viewer-vol-slider" type="range" min="0" max="100" value="100" title="볼륨" />
+                    <button class="vc-btn" id="viewer-fs-btn" type="button" title="전체화면 (F)">⛶</button>
+                </div>
+                <div class="viewer-clip-label" id="viewer-clip-label"></div>
+                <!-- 클립 strip — reorder + 시각적 위치 표시 -->
+                <div class="viewer-timeline" id="viewer-timeline"></div>
+            </div>
         </section>
     </main>
 
@@ -96,6 +198,7 @@
         <button type="button" data-action="navigate">📂 구성에서 보기</button>
         <button type="button" data-action="reveal">📁 원본 위치 열기</button>
         <button type="button" data-action="rename">✎ 이름 변경 (F2)</button>
+        <button type="button" data-action="comments">💬 코멘트 (/)</button>
         <button type="button" data-action="delete" class="tree-menu-danger">🗑 삭제 (Del)</button>
     </div>
 
@@ -106,19 +209,52 @@
         <div class="lightbox-caption" id="lightbox-caption"></div>
     </div>
 
+    <!-- 보기 탭 — 항목 추가 picker (모달) -->
+    <div id="viewer-picker" class="viewer-picker hidden">
+        <div class="viewer-picker-box">
+            <div class="viewer-picker-header">
+                <span class="viewer-picker-title">트랙에 추가</span>
+                <span class="viewer-picker-bc" id="viewer-picker-bc"></span>
+                <button class="viewer-picker-close" type="button" id="viewer-picker-close" title="닫기 (Esc)">✕</button>
+            </div>
+            <div class="viewer-picker-body">
+                <ul class="viewer-picker-tree" id="viewer-picker-tree"></ul>
+                <div class="viewer-picker-main">
+                    <div class="viewer-picker-toolbar">
+                        <select class="vp-sort" id="viewer-picker-sort" title="정렬 기준">
+                            <option value="name">이름</option>
+                            <option value="kind">종류</option>
+                            <option value="size">크기</option>
+                            <option value="mtime">수정일</option>
+                        </select>
+                        <button class="vp-sort-dir" id="viewer-picker-sort-dir" type="button" title="오름/내림">↑</button>
+                        <select class="vp-kind-select" id="viewer-picker-kind" title="종류 필터">
+                            <option value="">전체</option>
+                            <option value="image">이미지</option>
+                            <option value="video">영상</option>
+                        </select>
+                        <div class="vp-color-filter" id="viewer-picker-color">
+                            <button class="vp-color-btn vp-color-red" type="button" data-color="red" title="빨강 (다시 누르면 해제)">●</button>
+                            <button class="vp-color-btn vp-color-green" type="button" data-color="green" title="초록 (다시 누르면 해제)">●</button>
+                            <button class="vp-color-btn vp-color-blue" type="button" data-color="blue" title="파랑 (다시 누르면 해제)">●</button>
+                        </div>
+                    </div>
+                    <div class="viewer-picker-grid" id="viewer-picker-grid"></div>
+                </div>
+            </div>
+            <div class="viewer-picker-footer">
+                <span class="viewer-picker-hint">클릭 = 트랙에 추가 · 드래그 = 원하는 위치에 삽입 · 폴더 트리로 범위 변경</span>
+                <span class="viewer-picker-added" id="viewer-picker-added"></span>
+            </div>
+        </div>
+    </div>
+
     <!-- ═══════════════════════════════════════════════════════════ -->
     <!-- Spotlight 오버레이 (하단 도킹)                                -->
     <!-- ═══════════════════════════════════════════════════════════ -->
     <div class="spotlight" id="spotlight">
         <div class="spotlight-content">
-            <button class="results-toggle hidden" id="results-toggle" type="button" title="결과">
-                <span class="rt-icon" id="results-toggle-icon">+</span>
-                <span id="results-unseen" class="results-unseen hidden">0</span>
-            </button>
-            <div class="results hidden" id="results">
-                <div class="results-grid" id="results-grid"></div>
-            </div>
-
+            <!-- 결과 영역 폐기 — 진행/이력은 사이드바 '큐' 탭에서 확인 -->
             <div class="panel" id="panel">
                 <div class="prompt-row" id="prompt-row">
                     <button class="add-btn" type="button" id="add-ref-btn" title="참조 이미지 추가 (@)">+</button>
@@ -148,11 +284,6 @@
                             <span id="ratio-value">16:9</span>
                         </button>
                         <div class="dynamic-opts" id="dynamic-opts"></div>
-                        <button class="chip" id="project-btn" type="button" title="결과 저장 프로젝트">
-                            <span class="chip-svg" style="font-size:13px">📁</span>
-                            <span id="project-value">(프로젝트 선택)</span>
-                            <span class="chip-caret">&#x203A;</span>
-                        </button>
                     </div>
                     <button class="gen-btn" id="gen-btn" type="button">
                         Generate <span class="gen-sparkle">&#x2726;</span>
@@ -162,7 +293,6 @@
 
             <div class="dropdown hidden" id="model-dropdown"></div>
             <div class="dropdown hidden" id="ratio-dropdown"></div>
-            <div class="dropdown hidden" id="project-dropdown"></div>
 
             <div class="fav-picker hidden" id="fav-picker">
                 <div id="tag-filter-badge" class="tag-filter-badge hidden">

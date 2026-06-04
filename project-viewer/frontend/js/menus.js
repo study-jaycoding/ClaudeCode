@@ -3,7 +3,7 @@
 // 메뉴 항목: 트리에서 보기 / 원본 위치 열기 / 이름 변경 / 삭제
 // 외부 의존: showFolderGrid, reloadTreeAndShow, loadTree (모두 callback)
 // =====================================================================
-import { treeMenu, previewInfo, previewContent, projectSelect } from "./dom.js";
+import { treeMenu, previewContent, projectSelect } from "./dom.js";
 import { cssQueryEscape, findNodeByPath } from "./utils.js";
 import {
     treeMenuTarget, setTreeMenuTarget,
@@ -18,8 +18,10 @@ import {
 } from "./favorites.js";
 import { pushUndo } from "./undo.js";
 import { closeContextPopup } from "./popup.js";
-import { setActiveLabel } from "./tree.js";
+import { setActiveLabelByPath } from "./tree.js";
 import { selectCard } from "./selection.js";
+import { showInfo, showOk, showWarn, showError } from "./info-toast.js";
+import { openCommentsModal } from "./comments.js";
 
 // 외부 callback
 let _showFolderGrid = () => {};
@@ -54,7 +56,7 @@ export function openTreeMenu(mx, my, project, paths, opts = {}) {
             visible = allowed.includes(a);
         } else {
             if (a === "navigate") visible = false;
-            else if (a === "reveal" || a === "rename") visible = single;
+            else if (a === "reveal" || a === "rename" || a === "comments") visible = single;
             else visible = true;
         }
         btn.classList.toggle("hidden", !visible);
@@ -96,6 +98,8 @@ treeMenu.querySelectorAll("button[data-action]").forEach((btn) => {
             if (!startInlineRenameForPath(project, paths[0])) {
                 await renameFilePrompt(project, paths[0]);
             }
+        } else if (action === "comments" && paths.length === 1) {
+            openCommentsModal(paths[0]);
         } else if (action === "new-folder" && paths.length >= 1) {
             // 폴더 우클릭 → 그 안에, 파일 우클릭 → 그 파일이 있는 폴더 안에
             const target = paths[0];
@@ -133,13 +137,12 @@ export async function navigateToPath(project, path) {
     setCurrentDir(parentDir);
     const parentNode = findNodeByPath(rootTree, parentDir) || rootTree;
     _showFolderGrid(project, parentNode);
-    const treeLabel = document.querySelector(
+    setActiveLabelByPath(path, false);
+    // 보이는 트리(file-tree/gen-tree 중 화면에 있는 것) 의 라벨로 스크롤
+    const visibleLabel = Array.from(document.querySelectorAll(
         `.tree .file-label[data-path="${cssQueryEscape(path)}"]`
-    );
-    if (treeLabel) {
-        setActiveLabel(treeLabel);
-        treeLabel.scrollIntoView({ block: "nearest", behavior: "smooth" });
-    }
+    )).find((l) => l.offsetParent !== null);
+    if (visibleLabel) visibleLabel.scrollIntoView({ block: "nearest", behavior: "smooth" });
     const cardEl = previewContent.querySelector(
         `.card[data-path="${cssQueryEscape(path)}"]`
     );
@@ -153,9 +156,9 @@ export async function navigateToPath(project, path) {
 export async function revealFile(project, path) {
     try {
         const { ok, status, data } = await apiReveal(project, path);
-        if (!ok) previewInfo.textContent = `⚠ 탐색기 열기 실패: ${data.error || status}`;
+        if (!ok) showError(`⚠ 탐색기 열기 실패: ${data.error || status}`);
     } catch (err) {
-        previewInfo.textContent = `⚠ 탐색기 열기 오류: ${err.message}`;
+        showError(`⚠ 탐색기 열기 오류: ${err.message}`);
     }
 }
 
@@ -181,7 +184,7 @@ export async function moveFilesPrompt(project, paths) {
     }
     if (paths.length > 1) {
         await _reloadTreeAndShow(project, currentDir);
-        previewInfo.textContent = `✓ 이동: ${ok}개 성공${fail ? `, ${fail} 실패` : ""} → ${dest || "(루트)"}/`;
+        showOk(`✓ 이동: ${ok}개 성공${fail ? `, ${fail} 실패` : ""} → ${dest || "(루트)"}/`);
     }
 }
 
@@ -189,11 +192,11 @@ export async function renameFilePrompt(project, path) {
     const currentName = path.split("/").pop();
     const newName = prompt("새 파일 이름:", currentName);
     if (!newName || newName === currentName) return;
-    previewInfo.textContent = `이름 변경 중: ${currentName} → ${newName}...`;
+    showInfo(`이름 변경 중: ${currentName} → ${newName}...`);
     try {
         const { ok, status, data } = await apiRename(project, path, newName.trim());
         if (!ok) {
-            previewInfo.textContent = `⚠ 이름 변경 실패: ${data.error || status}`;
+            showError(`⚠ 이름 변경 실패: ${data.error || status}`);
             return;
         }
         for (const f of favorites) {
@@ -201,7 +204,7 @@ export async function renameFilePrompt(project, path) {
         }
         persistFavorites();
         await _reloadTreeAndShow(project, currentDir);
-        previewInfo.textContent = `✓ 이름 변경: ${data.name} (Ctrl+Z 로 되돌리기)`;
+        showOk(`✓ 이름 변경: ${data.name} (Ctrl+Z 로 되돌리기)`);
         const origName = currentName;
         const newPath = data.to;
         pushUndo(`이름 변경 (${origName})`, async () => {
@@ -214,7 +217,7 @@ export async function renameFilePrompt(project, path) {
             await _reloadTreeAndShow(project, currentDir);
         });
     } catch (err) {
-        previewInfo.textContent = `⚠ 이름 변경 오류: ${err.message}`;
+        showError(`⚠ 이름 변경 오류: ${err.message}`);
     }
 }
 
@@ -259,7 +262,7 @@ export function startInlineRename(labelEl, project, path, isFolder) {
         try {
             const { ok, data } = await apiRename(project, path, newName);
             if (!ok) {
-                previewInfo.textContent = `⚠ 이름 변경 실패: ${data.error || ""}`;
+                showError(`⚠ 이름 변경 실패: ${data.error || ""}`);
                 restore();
                 return;
             }
@@ -276,7 +279,7 @@ export function startInlineRename(labelEl, project, path, isFolder) {
             }
             persistFavorites();
             await _reloadTreeAndShow(project, currentDir);
-            previewInfo.textContent = `✓ 이름 변경: ${data.name}`;
+            showOk(`✓ 이름 변경: ${data.name}`);
             const origPath = path;
             const newPath = data.to;
             pushUndo(`이름 변경 (${baseName})`, async () => {
@@ -296,7 +299,7 @@ export function startInlineRename(labelEl, project, path, isFolder) {
                 await _reloadTreeAndShow(project, currentDir);
             });
         } catch (err) {
-            previewInfo.textContent = `⚠ 이름 변경 오류: ${err.message}`;
+            showError(`⚠ 이름 변경 오류: ${err.message}`);
             restore();
         }
     };
@@ -321,13 +324,99 @@ export function startInlineRenameForPath(project, path) {
         const n = findNodeByPath(rootTree, path);
         return n ? n.type === "dir" : false;
     })();
-    const sel = isDir
+
+    // 1순위: 보이는 트리 라벨 (구성 탭 활성 또는 gen-tree 표시)
+    const treeSel = isDir
         ? `.tree .dir-label[data-path="${cssQueryEscape(path)}"]`
         : `.tree .file-label[data-path="${cssQueryEscape(path)}"]`;
-    const label = document.querySelector(sel);
-    if (!label) return false;
-    startInlineRename(label, project, path, isDir);
-    return true;
+    const treeLabel = Array.from(document.querySelectorAll(treeSel))
+        .find((l) => l.offsetParent !== null);
+    if (treeLabel) {
+        startInlineRename(treeLabel, project, path, isDir);
+        return true;
+    }
+
+    // 2순위: 보이는 우측 그리드 카드의 .card-name (모든 탭에서 작동)
+    const cardName = document.querySelector(
+        `.preview-content .card[data-path="${cssQueryEscape(path)}"] .card-name`
+    );
+    if (cardName && cardName.offsetParent) {
+        startInlineRenameOnCardName(cardName, project, path, isDir);
+        return true;
+    }
+
+    return false;  // 둘 다 없으면 호출자가 prompt fallback
+}
+
+/** 그리드 카드의 .card-name 인라인 편집 — 트리 라벨용 startInlineRename 의 카드 버전.
+ *  카드 텍스트에 prefix(아이콘) 없으므로 전체를 baseName 으로 처리. */
+function startInlineRenameOnCardName(nameEl, project, path, isFolder) {
+    if (!nameEl || nameEl.dataset.renaming === "1") return;
+    nameEl.dataset.renaming = "1";
+
+    const origHtml = nameEl.innerHTML;
+    const baseName = path.split("/").pop();
+
+    nameEl.textContent = "";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "inline-rename-input";
+    input.value = baseName;
+    input.spellcheck = false;
+    nameEl.appendChild(input);
+    input.focus();
+    if (!isFolder) {
+        const dot = baseName.lastIndexOf(".");
+        if (dot > 0) input.setSelectionRange(0, dot);
+        else input.select();
+    } else {
+        input.select();
+    }
+
+    let settled = false;
+    const restore = () => {
+        nameEl.innerHTML = origHtml;
+        nameEl.dataset.renaming = "";
+    };
+    const commit = async () => {
+        if (settled) return;
+        settled = true;
+        const newName = input.value.trim();
+        if (!newName || newName === baseName) { restore(); return; }
+        try {
+            const { ok, data } = await apiRename(project, path, newName);
+            if (!ok) {
+                showError(`⚠ 이름 변경 실패: ${data.error || ""}`);
+                restore();
+                return;
+            }
+            // favorites 캐시 동기화 (트리 인라인 rename 과 동일)
+            for (const f of favorites) {
+                if (f.project !== project) continue;
+                if (isFolder) {
+                    if (f.path === path || f.path.startsWith(path + "/")) {
+                        f.path = data.to + f.path.substring(path.length);
+                    }
+                } else {
+                    if (f.path === path) f.path = data.to;
+                }
+            }
+            persistFavorites();
+            await _reloadTreeAndShow(project, currentDir);
+            showOk(`✓ 이름 변경: ${data.name}`);
+        } catch (err) {
+            showError(`⚠ 이름 변경 오류: ${err.message}`);
+            restore();
+        }
+    };
+    const cancel = () => { if (!settled) { settled = true; restore(); } };
+    input.addEventListener("keydown", (e) => {
+        e.stopPropagation();
+        if (e.key === "Enter") { e.preventDefault(); commit(); }
+        else if (e.key === "Escape") { e.preventDefault(); cancel(); }
+    });
+    input.addEventListener("blur", () => commit());
+    input.addEventListener("click", (e) => e.stopPropagation());
 }
 
 // + 버튼: 기본명 "새 폴더" 로 만들고 곧바로 인라인 rename 모드 진입.
@@ -340,7 +429,7 @@ export async function createDefaultFolderInside(project, parentDir) {
         const { ok, status, data } = await apiMkdir(project, parentDir, name);
         if (ok) { made = data; break; }
         if (status !== 409) {
-            previewInfo.textContent = `⚠ 폴더 생성 실패: ${data.error || status}`;
+            showError(`⚠ 폴더 생성 실패: ${data.error || status}`);
             return;
         }
         name = `새 폴더 (${n++})`;
@@ -370,13 +459,13 @@ export async function createFolderPrompt(project, parentDir) {
     try {
         const { ok, data } = await apiMkdir(project, parentDir, trimmed);
         if (!ok) {
-            previewInfo.textContent = `⚠ 폴더 생성 실패: ${data.error || ""}`;
+            showError(`⚠ 폴더 생성 실패: ${data.error || ""}`);
             return;
         }
         await _reloadTreeAndShow(project, parentDir);
-        previewInfo.textContent = `✓ 폴더 생성: ${data.path}`;
+        showOk(`✓ 폴더 생성: ${data.path}`);
     } catch (err) {
-        previewInfo.textContent = `⚠ 폴더 생성 오류: ${err.message}`;
+        showError(`⚠ 폴더 생성 오류: ${err.message}`);
     }
 }
 
@@ -390,7 +479,7 @@ export async function deleteFilesConfirm(project, paths) {
         ? `정말로 삭제하시겠습니까?\n\n${paths[0]}\n\n(되돌릴 수 없습니다)`
         : `정말로 ${paths.length}개 항목을 삭제하시겠습니까?\n\n${paths.slice(0, 5).join("\n")}${paths.length > 5 ? `\n... 외 ${paths.length - 5}개` : ""}\n\n(되돌릴 수 없습니다)`;
     if (!confirm(msg)) return;
-    previewInfo.textContent = `삭제 중: ${paths.length}개...`;
+    showInfo(`삭제 중: ${paths.length}개...`);
     let ok = 0, fail = 0;
     for (const p of paths) {
         try {
@@ -405,15 +494,15 @@ export async function deleteFilesConfirm(project, paths) {
     updateFavCount();
     renderFavorites();
     await _reloadTreeAndShow(project, currentDir);
-    previewInfo.textContent = `✓ 삭제: ${ok}개 성공${fail ? `, ${fail} 실패` : ""}`;
+    showOk(`✓ 삭제: ${ok}개 성공${fail ? `, ${fail} 실패` : ""}`);
 }
 
 export async function moveFile(project, fromPath, toDirPath, silent = false, _isUndo = false) {
-    if (!silent) previewInfo.textContent = `이동 중: ${fromPath} → ${toDirPath}/...`;
+    if (!silent) showInfo(`이동 중: ${fromPath} → ${toDirPath}/...`);
     try {
         const { ok, status, data } = await apiMove(project, fromPath, toDirPath);
         if (!ok) {
-            if (!silent) previewInfo.textContent = `⚠ 이동 실패: ${data.error || status}`;
+            if (!silent) showError(`⚠ 이동 실패: ${data.error || status}`);
             return false;
         }
         for (const f of favorites) {
@@ -423,7 +512,7 @@ export async function moveFile(project, fromPath, toDirPath, silent = false, _is
         if (!silent) {
             const stayDir = currentDir;
             await _reloadTreeAndShow(project, stayDir);
-            previewInfo.textContent = `✓ 이동 완료: ${data.name} → ${toDirPath}/ (Ctrl+Z 로 되돌리기)`;
+            showOk(`✓ 이동 완료: ${data.name} → ${toDirPath}/ (Ctrl+Z 로 되돌리기)`);
         }
         if (!_isUndo) {
             const fromDir = fromPath.includes("/") ? fromPath.substring(0, fromPath.lastIndexOf("/")) : "";
@@ -434,7 +523,7 @@ export async function moveFile(project, fromPath, toDirPath, silent = false, _is
         }
         return true;
     } catch (err) {
-        if (!silent) previewInfo.textContent = `⚠ 이동 오류: ${err.message}`;
+        if (!silent) showError(`⚠ 이동 오류: ${err.message}`);
         return false;
     }
 }

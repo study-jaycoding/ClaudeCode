@@ -4,9 +4,7 @@ viewer 의 server.py 상수와 함수를 사용하지 않고 자급자족하도�
 viewer/spotlight 양쪽에서 같은 D:/ClaudeCode-data/ 경로를 본다.
 """
 
-import json
 import mimetypes
-import random
 import re
 import time
 import urllib.request
@@ -14,26 +12,8 @@ import urllib.error
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
-PROJECTS_DIR = Path("D:/ClaudeCode-data/projects")
-FAVORITES_FILE = Path("D:/ClaudeCode-data/favorites.json")
-
-_ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
-
-
-def _to_base36(n: int) -> str:
-    if n == 0:
-        return "0"
-    digits = []
-    while n:
-        n, r = divmod(n, 36)
-        digits.append(_ID_ALPHABET[r])
-    return "".join(reversed(digits))
-
-
-def generate_id() -> str:
-    ts = int(time.time() * 1000)
-    rand = "".join(random.choices(_ID_ALPHABET, k=6))
-    return _to_base36(ts) + rand
+from ._paths import PROJECTS_DIR
+from .favorites_store import generate_id
 
 
 def resolve_media_path(local_url: str) -> Path | None:
@@ -88,7 +68,8 @@ def download_to_project(url: str, project: str, subdir: str) -> dict | None:
 
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "spotlight/1.0"})
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        # 비디오 결과는 100MB+ 가능 — timeout 충분히 길게.
+        with urllib.request.urlopen(req, timeout=600) as resp:
             content_type = resp.headers.get("Content-Type", "")
             raw = resp.read()
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError) as e:
@@ -118,44 +99,11 @@ def write_sidecar(project: str, rel_path: str, metadata: dict) -> bool:
         return False
 
 
-def load_favorites() -> list[dict]:
-    if not FAVORITES_FILE.exists():
-        return []
-    try:
-        data = json.loads(FAVORITES_FILE.read_text(encoding="utf-8"))
-        return data if isinstance(data, list) else []
-    except (json.JSONDecodeError, OSError):
-        return []
-
-
-def save_favorites(favs: list[dict]) -> None:
-    try:
-        FAVORITES_FILE.parent.mkdir(parents=True, exist_ok=True)
-        FAVORITES_FILE.write_text(json.dumps(favs, ensure_ascii=False, indent=2), encoding="utf-8")
-    except OSError as e:
-        print(f"[spotlight] favorites write failed: {e}")
+# favorites — generation.py 의 단일 호출자만 남음.
+# 다른 모든 사용자 (server.py, spotlight API) 는 favorites_store 를 직접 import.
+from . import favorites_store as _fs
 
 
 def append_favorite(project: str, rel_path: str, source_ids: list) -> dict | None:
-    favs = load_favorites()
-    for f in favs:
-        if f.get("project") == project and f.get("path") == rel_path:
-            existing = f.get("sourceIds") or []
-            merged = list(dict.fromkeys(existing + list(source_ids or [])))
-            f["sourceIds"] = merged
-            save_favorites(favs)
-            return f
-
-    new_fav = {
-        "id": generate_id(),
-        "project": project,
-        "path": rel_path,
-        "tags": [],
-        "note": "",
-        "sourceIds": list(source_ids or []),
-        "isSource": False,
-        "addedAt": int(time.time() * 1000),
-    }
-    favs.append(new_fav)
-    save_favorites(favs)
-    return new_fav
+    """프로젝트별 favorites 에 entry 추가 — favorites_store 의 lock-safe 구현 사용."""
+    return _fs.append_favorite(project, rel_path, source_ids)

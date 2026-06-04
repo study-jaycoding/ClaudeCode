@@ -79,6 +79,20 @@ const SIDECAR_OPT_KEYS = [
     "flux_variant", "veo_variant", "minimax_variant", "batch_size",
 ];
 
+// URL (/media?project=X&path=Y) 의 fav 가 소스로 지정됐는지.
+// drop 시 sidecar 복원 흐름을 건너뛰기 위한 빠른 체크.
+function _isSourceFavByUrl(url) {
+    try {
+        const u = new URL(url, location.origin);
+        const project = u.searchParams.get("project");
+        const path = u.searchParams.get("path");
+        if (!project || !path) return false;
+        const favs = (cache && cache.favorites) || [];
+        return favs.some((f) =>
+            f.project === project && f.path === path && f.isSource === true);
+    } catch { return false; }
+}
+
 // sidecar 의 생성 설정을 spotlight 전체 상태로 복원.
 function applyGenerationSidecar(sc) {
     if (!sc || !sc.model) return false;
@@ -137,7 +151,20 @@ function applyGenerationSidecar(sc) {
 }
 
 function addDirectRef(url) {
-    const name = url.split("/").pop().split("?")[0] || "image";
+    // /media?project=X&path=Y 형태이면 path 쿼리 파라미터의 마지막 segment 가 진짜 파일명.
+    // 단순 split("/").pop() 하면 "media?project=..." → split("?")[0] = "media" 로 잘못 잡힘.
+    let name = "image";
+    try {
+        const u = new URL(url, location.origin);
+        const pathParam = u.searchParams.get("path");
+        if (pathParam) {
+            name = pathParam.split("/").pop() || "image";
+        } else {
+            name = u.pathname.split("/").pop() || "image";
+        }
+    } catch {
+        name = (url.split("/").pop() || "image").split("?")[0] || "image";
+    }
     const dotIdx = name.lastIndexOf(".");
     const cleanName = dotIdx > 0 ? name.substring(0, dotIdx) : name;
     const ref = { directUrl: url, name: cleanName.substring(0, 20) };
@@ -212,14 +239,22 @@ export function bindRefImages() {
             ensureCaretInPrompt();
         }
 
-        // 0. viewer 의 내부 카드 (application/x-pv-internal) → sidecar 있으면 설정 복원
+        // 0. viewer 의 내부 카드 (application/x-pv-internal)
         if (e.dataTransfer.getData("application/x-pv-internal") === "card") {
             const url = e.dataTransfer.getData("text/uri-list")
                 || e.dataTransfer.getData("text/plain") || "";
             const firstUrl = url.split(/\r?\n/).find((s) => /^https?:\/\//i.test(s)) || url;
+
+            // 소스로 지정된 fav 면 sidecar 무시 — 무조건 ref 로만 추가.
+            // (사용자가 입력한 prompt 가 sidecar 의 prompt 로 덮어쓰이는 일 방지)
+            if (firstUrl && _isSourceFavByUrl(firstUrl)) {
+                addDirectRef(firstUrl.trim());
+                return;
+            }
+
+            // 소스 아닌 경우: sidecar 있으면 그 설정으로 복원, 없으면 일반 ref.
             const sc = await fetchSidecarFromMediaUrl(firstUrl);
             if (sc && applyGenerationSidecar(sc)) return;
-            // sidecar 없는 일반 viewer 이미지 → ref 로 추가
             if (firstUrl) { addDirectRef(firstUrl.trim()); return; }
         }
 

@@ -22,15 +22,139 @@ export async function apiGetTree(project) {
     return { ok: res.ok, status: res.status, data };
 }
 
-/** GET /api/favorites */
-export async function apiGetFavorites() {
-    const res = await fetch("/api/favorites");
+/** GET /api/favorites?project=<name> — 그 프로젝트의 favorites 만.
+ *  project 없으면 모든 프로젝트 합쳐서 반환 (cross-project 검색용). */
+export async function apiGetFavorites(project) {
+    const q = project ? "?project=" + encodeURIComponent(project) : "";
+    const res = await fetch("/api/favorites" + q);
     return res.json();
 }
 
-/** POST /api/favorites — body 는 favorites 배열. fire-and-forget. */
-export function apiPersistFavorites(favorites) {
-    return fetch("/api/favorites", J(favorites)).catch(() => {});
+/** POST /api/favorites?project=<name> — 그 프로젝트의 favorites 통째 덮어쓰기.
+ *  body 는 그 프로젝트의 favorites 배열만. project 없으면 backend 가 거부. */
+export function apiPersistFavorites(project, favorites) {
+    if (!project) return Promise.resolve();  // 프로젝트 없으면 noop
+    const q = "?project=" + encodeURIComponent(project);
+    return fetch("/api/favorites" + q, J(favorites)).catch(() => {});
+}
+
+/** POST /api/sp/recover — 큐 entry 의 job_ids 를 다시 조회해서 결과 가져옴.
+ *  ip_detected (사이트 confirm 필요) 케이스에 사용자가 사이트 다녀온 후 호출. */
+export async function apiSpRecoverJob(queueId) {
+    const res = await fetch("/api/sp/recover", J({ queue_id: queueId }));
+    let data = null;
+    try { data = await res.json(); } catch {}
+    return { ok: res.ok, status: res.status, data };
+}
+
+/** GET /api/colors?project=<name> — 그 프로젝트 카드 컬러 마커 (path → color). */
+export async function apiGetColors(project) {
+    if (!project) return { colors: {} };
+    const res = await fetch("/api/colors?project=" + encodeURIComponent(project));
+    return res.json();
+}
+
+/** POST /api/colors — paths 일괄 색 변경. color=null 이면 제거. */
+export async function apiSetColors(project, paths, color) {
+    if (!project || !paths || paths.length === 0) return { ok: false, colors: {} };
+    const body = { project, paths, color: color || null };
+    const res = await fetch("/api/colors", J(body));
+    return res.json();
+}
+
+/** GET /api/comments?project=<name> — 그 프로젝트 전체 코멘트 ({path: [...]}) */
+export async function apiGetComments(project) {
+    if (!project) return { comments: {} };
+    const res = await fetch("/api/comments?project=" + encodeURIComponent(project));
+    return res.json();
+}
+
+// 코멘트 API 들 — status 가 ok 가 아니거나 JSON 파싱 실패 시 {ok:false, error} 반환.
+// 서버가 새 endpoint 를 모르면 (재시작 안 됨) 404 HTML 을 받아 res.json() 이 던지므로 catch.
+async function _safeJson(res, fallbackError) {
+    try {
+        const data = await res.json();
+        if (!res.ok && !data.error) data.error = `HTTP ${res.status}`;
+        return data;
+    } catch {
+        return { ok: false, error: fallbackError + ` (HTTP ${res.status})` };
+    }
+}
+
+/** POST /api/comments — 단일 코멘트 추가. 응답에 새 entry. */
+export async function apiAddComment(project, path, author, text) {
+    try {
+        const res = await fetch("/api/comments", J({ project, path, author, text }));
+        return await _safeJson(res, "코멘트 API 응답 파싱 실패 — 서버 재시작이 필요할 수 있습니다");
+    } catch (e) {
+        return { ok: false, error: "네트워크 오류: " + e.message };
+    }
+}
+
+/** POST /api/comments/reply — 기존 코멘트에 답글 추가. */
+export async function apiAddReply(project, path, parentId, author, text) {
+    try {
+        const res = await fetch("/api/comments/reply", J({ project, path, parentId, author, text }));
+        return await _safeJson(res, "답글 API 응답 파싱 실패");
+    } catch (e) {
+        return { ok: false, error: "네트워크 오류: " + e.message };
+    }
+}
+
+/** POST /api/comments/delete — 단일 코멘트 또는 답글 제거. */
+export async function apiDeleteComment(project, path, id) {
+    try {
+        const res = await fetch("/api/comments/delete", J({ project, path, id }));
+        return await _safeJson(res, "코멘트 삭제 API 실패");
+    } catch (e) {
+        return { ok: false, error: "네트워크 오류: " + e.message };
+    }
+}
+
+/** POST /api/comments/update — 코멘트 본문 수정. */
+export async function apiUpdateComment(project, path, id, text) {
+    try {
+        const res = await fetch("/api/comments/update", J({ project, path, id, text }));
+        return await _safeJson(res, "코멘트 수정 API 실패");
+    } catch (e) {
+        return { ok: false, error: "네트워크 오류: " + e.message };
+    }
+}
+
+/** GET /api/sp/jobs?status=&project=&limit= — Spotlight Job Queue 이력 */
+export async function apiGetJobs({ status, project, limit } = {}) {
+    const params = new URLSearchParams();
+    if (status) params.set("status", status);
+    if (project) params.set("project", project);
+    if (limit) params.set("limit", String(limit));
+    const q = params.toString();
+    const res = await fetch("/api/sp/jobs" + (q ? "?" + q : ""));
+    const data = await res.json();
+    return { ok: res.ok, status: res.status, data };
+}
+
+/** POST /api/sp/jobs/clear-finished — 완료/실패 항목 일괄 제거.
+ *  onlyStatus = "completed" | "failed" 면 그 상태만, 기본은 둘 다. */
+export async function apiClearFinishedJobs(onlyStatus) {
+    const q = (onlyStatus === "completed" || onlyStatus === "failed")
+        ? "?status=" + onlyStatus : "";
+    const res = await fetch("/api/sp/jobs/clear-finished" + q, { method: "POST" });
+    return res.json();
+}
+
+
+/** POST /api/sp/jobs/remove — 단일 job 제거 */
+export async function apiRemoveJob(id) {
+    const res = await fetch("/api/sp/jobs/remove", J({ id }));
+    return res.json();
+}
+
+/** GET /api/sp/jobs/<higgsfield_job_id> — Higgsfield 의 단일 job 현재 상태 조회 */
+export async function apiSpGetJobStatus(higgsfieldJobId) {
+    const res = await fetch("/api/sp/jobs/" + encodeURIComponent(higgsfieldJobId));
+    let data = null;
+    try { data = await res.json(); } catch {}
+    return { ok: res.ok, status: res.status, data };
 }
 
 /** GET /api/meta?project&path */

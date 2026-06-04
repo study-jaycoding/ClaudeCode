@@ -37,6 +37,18 @@ export function makeCardDraggable(card, project, path, name) {
         // protected-mode (dragenter/dragover) 에서 DownloadURL 은 types 목록에 안 보이는
         // 경우가 있어, 내부 드래그 식별용 커스텀 MIME 을 별도로 부착.
         e.dataTransfer.setData("application/x-pv-internal", "card");
+        // 단일 path (기존 트리 라벨 드래그와 호환). 다중 선택 시 첫 path.
+        e.dataTransfer.setData("text/x-tree-path", path);
+        // 다중 path — 현재 그리드의 .card.selected 모두 모음 (newline-separated).
+        // drop handler 가 이 키 우선, 없으면 단일 키 fallback.
+        const selectedPaths = Array.from(document.querySelectorAll(
+            ".preview-content .card.selected[data-path]"
+        )).map((c) => c.dataset.path).filter(Boolean);
+        if (selectedPaths.length > 1) {
+            // 드래그 중인 카드 path 가 우선되도록 첫 자리로
+            const ordered = [path, ...selectedPaths.filter((p) => p !== path)];
+            e.dataTransfer.setData("text/x-tree-paths", ordered.join("\n"));
+        }
         e.dataTransfer.effectAllowed = "copyMove";
         card.classList.add("dragging");
     });

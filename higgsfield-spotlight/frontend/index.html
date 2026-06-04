@@ -15,12 +15,15 @@
             <!-- Main panel -->
             <div class="panel" id="panel">
                 <!-- Prompt row -->
-                <div class="prompt-row">
+                <div class="prompt-row" id="prompt-row">
                     <button class="add-btn" type="button" id="add-ref-btn" title="참조 이미지 추가 (@)">+</button>
-                    <div class="ref-chips" id="ref-chips"></div>
-                    <input type="text" id="prompt-input" class="prompt-input"
-                           placeholder="Describe the scene you imagine"
-                           autocomplete="off" spellcheck="false" />
+                    <div id="tag-active-badge" class="tag-active-badge hidden">
+                        <span class="tab-label">#</span>
+                        <span id="tab-name"></span>
+                        <button id="tab-clear" type="button" tabindex="-1" title="태그 해제 (Esc 2번)">&times;</button>
+                    </div>
+                    <div id="prompt-input" class="prompt-input" contenteditable="true"
+                         spellcheck="false" data-placeholder="Describe the scene you imagine"></div>
                 </div>
 
                 <!-- Controls row -->
@@ -49,6 +52,13 @@
 
                         <!-- Dynamic options (rendered by JS) -->
                         <div class="dynamic-opts" id="dynamic-opts"></div>
+
+                        <!-- Project selector — 결과 자동 저장 대상 (맨 뒤) -->
+                        <button class="chip" id="project-btn" type="button" title="결과 저장 프로젝트">
+                            <span class="chip-svg" style="font-size:13px">📁</span>
+                            <span id="project-value">(프로젝트 선택)</span>
+                            <span class="chip-caret">&#x203A;</span>
+                        </button>
                     </div>
 
                     <!-- Generate button -->
@@ -62,11 +72,24 @@
             <!-- Dropdowns (positioned absolutely) -->
             <div class="dropdown hidden" id="model-dropdown"></div>
             <div class="dropdown hidden" id="ratio-dropdown"></div>
+            <div class="dropdown hidden" id="project-dropdown"></div>
 
             <!-- @ mention favorites picker -->
             <div class="fav-picker hidden" id="fav-picker">
+                <div id="tag-filter-badge" class="tag-filter-badge hidden">
+                    <span class="tfb-label">tag:</span>
+                    <span id="tfb-name"></span>
+                    <button id="tfb-clear" type="button" tabindex="-1">&times;</button>
+                </div>
                 <div class="fav-list" id="fav-list"></div>
                 <div class="fav-empty hidden" id="fav-empty">즐겨찾기가 없습니다</div>
+            </div>
+
+            <!-- \ tag picker -->
+            <div class="fav-picker hidden" id="tag-picker">
+                <div class="dropdown-title">태그 필터</div>
+                <div class="fav-list" id="tag-list"></div>
+                <div class="fav-empty hidden" id="tag-empty">태그가 없습니다</div>
             </div>
 
             <!-- Results area -->
@@ -94,6 +117,6 @@
         <div class="lightbox-body" id="lightbox-body"></div>
     </div>
 
-    <script src="/app.js"></script>
+    <script type="module" src="/app.js"></script>
 </body>
 </html>

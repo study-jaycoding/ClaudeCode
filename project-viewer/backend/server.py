@@ -24,18 +24,45 @@ import sys
 import threading
 import time
 
-# Spotlight 통합 모듈
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from spotlight import api as sp_api
 from urllib.parse import urlparse, parse_qs, unquote
 
 # 절대 경로 기준점
 BACKEND_DIR = Path(__file__).resolve().parent
 ROOT_DIR = BACKEND_DIR.parent  # d:\ClaudeCode\project-viewer
 FRONTEND_DIR = ROOT_DIR / "frontend"
-# project-manager 와 동일한 projects 폴더 (git repo 바깥) 를 본다.
-PROJECTS_DIR = Path("D:/ClaudeCode-data/projects")
-FAVORITES_FILE = Path("D:/ClaudeCode-data/favorites.json")
+
+# ── .env 자동 로드 (선택) ────────────────────────────────────────
+# Spotlight 모듈들 (projects_ops / jobs_log 등) 이 import 시점에 os.environ 을 읽어
+# 모듈 상수를 고정하기 때문에 — .env 로드는 반드시 그 import 보다 *먼저* 수행해야 한다.
+def _load_dotenv() -> None:
+    """ROOT_DIR/.env 또는 BACKEND_DIR/.env 의 KEY=VALUE 를 os.environ 에 주입.
+    이미 있는 환경변수는 덮어쓰지 않는다. 의존성 없음."""
+    import os
+    for env_path in (ROOT_DIR / ".env", BACKEND_DIR / ".env"):
+        if not env_path.is_file():
+            continue
+        try:
+            for line in env_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                k = k.strip()
+                v = v.strip().strip('"').strip("'")
+                if k and k not in os.environ:
+                    os.environ[k] = v
+        except OSError:
+            pass
+
+_load_dotenv()
+
+# .env 로드 *후에* Spotlight 통합 모듈 import — 이래야 CCDATA_DIR 등이 반영된다.
+sys.path.insert(0, str(BACKEND_DIR))
+from spotlight import api as sp_api
+
+import os as _os
+CCDATA_DIR = Path(_os.environ.get("CCDATA_DIR", "D:/ClaudeCode-data"))
+PROJECTS_DIR = Path(_os.environ.get("CCDATA_PROJECTS_DIR", str(CCDATA_DIR / "projects")))
 
 # 확장자 기반 파일 분류
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico"}
@@ -57,18 +84,23 @@ STATIC_MIME = {
     ".ico": "image/x-icon",
 }
 
-PORT = 8766
+PORT = int(_os.environ.get("PV_PORT", "8766"))
+BIND = _os.environ.get("PV_BIND", "127.0.0.1")
 TEXT_MAX_BYTES = 1024 * 1024              # 텍스트 미리보기 최대 1MB
-MAX_UPLOAD_BYTES = 500 * 1024 * 1024      # 업로드 최대 500MB
+MAX_UPLOAD_BYTES = int(_os.environ.get("PV_MAX_UPLOAD_MB", "500")) * 1024 * 1024
 
 # Cross-origin 차단을 위한 허용 목록
+_extra_origins = [o.strip() for o in _os.environ.get("PV_EXTRA_ORIGINS", "").split(",") if o.strip()]
+_extra_hosts = [h.strip() for h in _os.environ.get("PV_EXTRA_HOSTS", "").split(",") if h.strip()]
 ALLOWED_ORIGINS = {
     f"http://127.0.0.1:{PORT}",
     f"http://localhost:{PORT}",
+    *_extra_origins,
 }
 ALLOWED_HOSTS = {
     f"127.0.0.1:{PORT}",
     f"localhost:{PORT}",
+    *_extra_hosts,
 }
 
 # Windows 에서 사용할 수 없는 파일명 문자 + 제어 문자
@@ -92,22 +124,150 @@ def _broadcast_event(msg: str) -> None:
                 pass
 
 
-def _favorites_watcher() -> None:
-    """favorites.json 의 mtime 을 1초마다 감시 → 변경 감지 시 SSE broadcast."""
-    last = 0.0
+# ─────────────────────────────────────────────────────────────────────
+# delete / rename / move 핸들러 공통: ledger + favorites 경로 동기화
+# 메인 동작 (실제 파일 작업) 은 이미 성공한 다음 호출됨. 동기화 실패는 절대 메인을
+# 깨면 안 되므로 try/except 로 광범위하게 감싸되 stderr 에 흔적은 남긴다.
+# ─────────────────────────────────────────────────────────────────────
+
+def _sync_ledger_path(project_dir: Path, old_rel: str, new_rel: str | None, *, is_dir: bool) -> None:
+    """ledger 키 동기화. new_rel=None 이면 삭제, 아니면 rename. 폴더면 prefix 일괄."""
     try:
-        last = FAVORITES_FILE.stat().st_mtime
-    except OSError:
-        last = 0.0
+        from spotlight import ledger as sp_ledger
+        if new_rel is None:
+            if is_dir:
+                sp_ledger.remove_with_prefix(project_dir, old_rel)
+            else:
+                sp_ledger.remove(project_dir, old_rel)
+        else:
+            sp_ledger.rename(project_dir, old_rel, new_rel, is_dir=is_dir)
+    except Exception as e:  # noqa: BLE001
+        print(f"[server] ledger sync fail ({old_rel} -> {new_rel}): {e}", file=sys.stderr)
+
+
+def _sync_favorites_path(project: str, old_rel: str, new_rel: str | None, *, is_dir: bool) -> None:
+    """favorites 의 path 동기화. new_rel=None 이면 해당 entry 삭제, 아니면 rename.
+    프로젝트별 lock 안에서 실행."""
+    try:
+        from spotlight import favorites_store as _fs
+        old_rel = old_rel.replace("\\", "/")
+        new_rel_norm = new_rel.replace("\\", "/") if new_rel else None
+        with _fs.FavoritesLock(project):
+            favs = _fs.load_favorites(project)
+            changed = False
+            kept: list[dict] = []
+            for f in favs:
+                p = f.get("path", "")
+                if new_rel_norm is None:
+                    # 삭제 — 파일은 정확 매치, 폴더는 prefix 매치
+                    if is_dir:
+                        if p == old_rel or p.startswith(old_rel + "/"):
+                            changed = True
+                            continue
+                    else:
+                        if p == old_rel:
+                            changed = True
+                            continue
+                    kept.append(f)
+                else:
+                    # rename — 파일은 정확 매치, 폴더는 prefix 치환
+                    if is_dir:
+                        if p == old_rel or p.startswith(old_rel + "/"):
+                            f["path"] = new_rel_norm + p[len(old_rel):]
+                            changed = True
+                    else:
+                        if p == old_rel:
+                            f["path"] = new_rel_norm
+                            changed = True
+                    kept.append(f)
+            if changed:
+                _fs.save_favorites(project, kept)
+    except Exception as e:  # noqa: BLE001
+        print(f"[server] favorites sync fail ({old_rel} -> {new_rel}): {e}", file=sys.stderr)
+
+
+def _sync_colors_path(project: str, old_rel: str, new_rel: str | None, *, is_dir: bool) -> None:
+    """colors 의 path 동기화. new_rel=None 이면 entry 삭제, 아니면 rename. 폴더면 prefix."""
+    try:
+        from spotlight import colors_store
+        if new_rel is None:
+            colors_store.remove_path(project, old_rel)
+        else:
+            colors_store.rename_path(project, old_rel, new_rel, is_dir=is_dir)
+    except Exception as e:  # noqa: BLE001
+        print(f"[server] colors sync fail ({old_rel} -> {new_rel}): {e}", file=sys.stderr)
+
+
+def _sync_jobs_path(project: str, old_rel: str, new_rel: str | None, *, is_dir: bool) -> None:
+    """jobs.json 의 thumbnail_path / result_paths 동기화 — 큐 카드 썸네일 오류 방지."""
+    try:
+        from spotlight import jobs_log
+        if new_rel is None:
+            jobs_log.remove_path(project, old_rel)
+        else:
+            jobs_log.rename_path(project, old_rel, new_rel, is_dir=is_dir)
+    except Exception as e:  # noqa: BLE001
+        print(f"[server] jobs sync fail ({old_rel} -> {new_rel}): {e}", file=sys.stderr)
+
+
+def _sync_comments_path(project: str, old_rel: str, new_rel: str | None, *, is_dir: bool) -> None:
+    """comments.json 의 path 동기화. new_rel=None 이면 entry 삭제, 아니면 rename."""
+    try:
+        from spotlight import comments_store
+        if new_rel is None:
+            comments_store.remove_path(project, old_rel)
+        else:
+            comments_store.rename_path(project, old_rel, new_rel, is_dir=is_dir)
+    except Exception as e:  # noqa: BLE001
+        print(f"[server] comments sync fail ({old_rel} -> {new_rel}): {e}", file=sys.stderr)
+
+
+def _favorites_watcher() -> None:
+    """모든 프로젝트의 _meta/favorites.json + 글로벌 leftover 의 mtime 폴링.
+    어느 하나라도 변경되면 SSE broadcast — 모든 PV 클라이언트가 즉시 자동 갱신.
+    프로젝트 추가/삭제도 매 폴링 시 자동 반영."""
+    last_max = 0.0
     while True:
         time.sleep(1.0)
+        cur_max = 0.0
         try:
-            cur = FAVORITES_FILE.stat().st_mtime
-        except OSError:
-            cur = 0.0
-        if cur != last:
-            last = cur
+            from spotlight.favorites_store import all_favorites_files
+            for p in all_favorites_files():
+                try:
+                    m = p.stat().st_mtime
+                    if m > cur_max:
+                        cur_max = m
+                except OSError:
+                    continue
+        except Exception:
+            continue
+        if cur_max != last_max:
+            last_max = cur_max
             _broadcast_event("favorites-changed")
+
+
+def _jobs_watcher() -> None:
+    """모든 프로젝트의 _meta/jobs.json + 글로벌 leftover 파일의 mtime 을 폴링.
+    어느 하나라도 변경되면 SSE broadcast — Queue 탭이 자동 갱신.
+    프로젝트 추가/삭제도 다음 폴링 시 자동 반영 (all_jobs_files 가 매번 재열거)."""
+    from spotlight.jobs_log import all_jobs_files
+    last_max = 0.0
+    while True:
+        time.sleep(1.0)
+        cur_max = 0.0
+        try:
+            for p in all_jobs_files():
+                try:
+                    m = p.stat().st_mtime
+                    if m > cur_max:
+                        cur_max = m
+                except OSError:
+                    continue
+        except Exception:
+            continue
+        if cur_max != last_max:
+            last_max = cur_max
+            _broadcast_event("jobs-changed")
 
 
 import struct
@@ -245,9 +405,17 @@ def _fill_tree(directory: Path, parent_node: dict, prefix: str) -> None:
     except PermissionError:
         return
 
+    # ledger 모듈은 자신이 만든 파일·폴더가 트리에 노출되지 않게 판별 함수를 제공.
+    try:
+        from spotlight import ledger as _sp_ledger_filter
+        _is_ledger = _sp_ledger_filter.is_ledger_path
+    except Exception:
+        _is_ledger = lambda p: False  # fallback
+
     for entry in entries:
-        # 시스템 ledger 파일은 트리에 노출 안 함
-        if entry.is_file() and entry.name == "_generations.json":
+        # 시스템 ledger 파일·폴더는 트리에 노출 안 함 (_generations/, _generations.json,
+        # _generations.json.migrated 등 모두 포함)
+        if _is_ledger(entry):
             continue
         rel = f"{prefix}{entry.name}"
         if entry.is_dir():
@@ -334,7 +502,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _send_media(self, path: Path) -> None:
-        """이미지/영상 파일을 응답. Range 헤더 있으면 206 Partial Content."""
+        """이미지/영상 파일을 응답. Range 헤더 있으면 206 Partial Content.
+        Cache-Control + ETag 로 브라우저 캐시 활용 → 새로고침 시 304 로 즉시 응답."""
         if not path.exists() or not path.is_file():
             self.send_error(404, "Not Found")
             return
@@ -343,14 +512,31 @@ class Handler(BaseHTTPRequestHandler):
         if not mime:
             mime = "application/octet-stream"
 
-        size = path.stat().st_size
+        stat = path.stat()
+        size = stat.st_size
+        mtime = int(stat.st_mtime)
+        # ETag = mtime + size 의 hex — 파일 내용 변경 시 자동으로 새 ETag.
+        etag = f'"{mtime:x}-{size:x}"'
+        # 304 Not Modified — 클라이언트의 If-None-Match 가 현재 ETag 와 같으면 본문 없이 응답
+        if self.headers.get("If-None-Match") == etag:
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", "private, max-age=3600, must-revalidate")
+            self.end_headers()
+            return
+
         range_header = self.headers.get("Range")
+        cache_headers = [
+            ("ETag", etag),
+            # 1시간 동안 캐시 OK, 그 후엔 ETag 로 conditional GET. 로컬 파일이라 long max-age 안전.
+            ("Cache-Control", "private, max-age=3600, must-revalidate"),
+            ("Last-Modified", time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime(mtime))),
+        ]
 
         if range_header and range_header.startswith("bytes="):
             try:
                 rng = range_header[6:].split("-", 1)
                 if not rng[0]:
-                    # Suffix range: bytes=-500 means last 500 bytes
                     start = max(0, size - int(rng[1]))
                     end = size - 1
                 else:
@@ -369,6 +555,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Content-Length", str(length))
+            for k, v in cache_headers:
+                self.send_header(k, v)
             self.end_headers()
             self._stream_file(path, start, length)
         else:
@@ -376,6 +564,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", mime)
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Content-Length", str(size))
+            for k, v in cache_headers:
+                self.send_header(k, v)
             self.end_headers()
             self._stream_file(path, 0, size)
 
@@ -422,6 +612,20 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(*sp_api.get_models()); return
         if path == "/api/sp/balance":
             self._send_json(*sp_api.get_balance()); return
+        # /api/sp/jobs (list)  vs  /api/sp/jobs/{id} (single status from CLI)
+        if path == "/api/sp/jobs":
+            from spotlight import jobs_log
+            status = params.get("status", [None])[0]
+            project = params.get("project", [None])[0]
+            limit_raw = params.get("limit", [None])[0]
+            try:
+                limit = int(limit_raw) if limit_raw else None
+            except ValueError:
+                limit = None
+            self._send_json(200, {"jobs": jobs_log.list_jobs(
+                status=status, project=project, limit=limit,
+            )})
+            return
         if path.startswith("/api/sp/jobs/"):
             self._send_json(*sp_api.get_job(path[len("/api/sp/jobs/"):])); return
 
@@ -434,14 +638,34 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/favorites":
-            if FAVORITES_FILE.exists():
-                try:
-                    favs = json.loads(FAVORITES_FILE.read_text(encoding="utf-8"))
-                except (json.JSONDecodeError, OSError):
-                    favs = []
-            else:
+            # ?project=<name> 이면 그 프로젝트만, 없으면 전체 (모든 프로젝트 + 글로벌 leftover)
+            project = (params.get("project") or [""])[0]
+            try:
+                from spotlight import favorites_store as _fs
+                favs = _fs.load_favorites(project) if project else _fs.all_favorites()
+            except Exception:
                 favs = []
             self._send_json(200, {"favorites": favs})
+            return
+
+        if path == "/api/colors":
+            project = (params.get("project") or [""])[0]
+            try:
+                from spotlight import colors_store
+                colors = colors_store.load_colors(project) if project else {}
+            except Exception:
+                colors = {}
+            self._send_json(200, {"colors": colors})
+            return
+
+        if path == "/api/comments":
+            project = (params.get("project") or [""])[0]
+            try:
+                from spotlight import comments_store
+                comments = comments_store.load_all(project) if project else {}
+            except Exception:
+                comments = {}
+            self._send_json(200, {"comments": comments})
             return
 
         if path == "/api/meta":
@@ -555,8 +779,48 @@ class Handler(BaseHTTPRequestHandler):
         path = parsed.path
         params = parse_qs(parsed.query)
 
+        # ── Spotlight Jobs Queue 관리 ────────────────────────────────
+        if path == "/api/sp/jobs/clear-finished":
+            if not self._check_same_origin():
+                self._send_json(403, {"error": "허용되지 않은 요청입니다."}); return
+            from spotlight import jobs_log
+            # ?status=completed | failed → 그 상태만. 없으면 둘 다.
+            only = (params.get("status") or [None])[0]
+            if only not in ("completed", "failed"):
+                only = None
+            project = (params.get("project") or [None])[0]
+            n = jobs_log.clear_finished(project=project, only_status=only)
+            self._send_json(200, {"removed": n})
+            return
+        if path == "/api/sp/jobs/clear-all":
+            if not self._check_same_origin():
+                self._send_json(403, {"error": "허용되지 않은 요청입니다."}); return
+            from spotlight import jobs_log
+            project = (params.get("project") or [None])[0]
+            n = jobs_log.clear_all(project=project)
+            self._send_json(200, {"removed": n})
+            return
+        if path == "/api/sp/jobs/remove":
+            if not self._check_same_origin():
+                self._send_json(403, {"error": "허용되지 않은 요청입니다."}); return
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length).decode("utf-8") if length else "{}"
+            try:
+                body = json.loads(raw)
+            except json.JSONDecodeError:
+                self._send_json(400, {"error": "잘못된 JSON"}); return
+            job_id = (body.get("id") or "").strip()
+            if not job_id:
+                self._send_json(400, {"error": "id 가 필요합니다."}); return
+            project = (body.get("project") or None) or None
+            from spotlight import jobs_log
+            ok = jobs_log.remove_job(job_id, project=project)
+            self._send_json(200, {"removed": 1 if ok else 0})
+            return
+
         # ── Spotlight 엔드포인트 ─────────────────────────────────────
-        if path in ("/api/sp/login", "/api/sp/generate", "/api/sp/cost", "/api/sp/ref-upload"):
+        if path in ("/api/sp/login", "/api/sp/generate", "/api/sp/cost",
+                    "/api/sp/ref-upload", "/api/sp/recover"):
             if not self._check_same_origin():
                 self._send_json(403, {"error": "허용되지 않은 요청입니다."})
                 return
@@ -570,6 +834,10 @@ class Handler(BaseHTTPRequestHandler):
                 length = int(self.headers.get("Content-Length", "0"))
                 raw = self.rfile.read(length).decode("utf-8") if length else ""
                 self._send_json(*sp_api.post_cost(raw)); return
+            if path == "/api/sp/recover":
+                length = int(self.headers.get("Content-Length", "0"))
+                raw = self.rfile.read(length).decode("utf-8") if length else ""
+                self._send_json(*sp_api.post_recover(raw)); return
             if path == "/api/sp/ref-upload":
                 length = int(self.headers.get("Content-Length", "0"))
                 filename = self.headers.get("X-File-Name", "upload.png")
@@ -659,27 +927,11 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._send_json(500, {"error": f"삭제 실패: {e}"})
                 return
-            # ledger 엔트리 정리
-            try:
-                from spotlight import ledger as sp_ledger
-                if was_dir:
-                    sp_ledger.remove_with_prefix(project_dir, rel)
-                else:
-                    sp_ledger.remove(project_dir, rel)
-            except Exception:
-                pass
-            # favorites.json 에서도 해당 항목 제거
-            if FAVORITES_FILE.exists():
-                try:
-                    favs = json.loads(FAVORITES_FILE.read_text(encoding="utf-8"))
-                    old_rel = rel.replace("\\", "/")
-                    favs = [f for f in favs if not (f.get("project") == project and f.get("path") == old_rel)]
-                    FAVORITES_FILE.write_text(
-                        json.dumps(favs, ensure_ascii=False, indent=2),
-                        encoding="utf-8",
-                    )
-                except Exception:
-                    pass
+            _sync_ledger_path(project_dir, rel, None, is_dir=was_dir)
+            _sync_favorites_path(project, rel, None, is_dir=was_dir)
+            _sync_colors_path(project, rel, None, is_dir=was_dir)
+            _sync_jobs_path(project, rel, None, is_dir=was_dir)
+            _sync_comments_path(project, rel, None, is_dir=was_dir)
             self._send_json(200, {"deleted": rel})
             return
 
@@ -759,38 +1011,25 @@ class Handler(BaseHTTPRequestHandler):
             new_rel = str(dst.relative_to(project_dir)).replace("\\", "/")
             old_rel = rel.replace("\\", "/")
             was_dir = dst.is_dir()
-            # ledger 키 동기화 (폴더면 prefix 일괄 치환)
-            try:
-                from spotlight import ledger as sp_ledger
-                sp_ledger.rename(project_dir, old_rel, new_rel, is_dir=was_dir)
-            except Exception:
-                pass
-            # favorites.json 경로 업데이트 — 파일이면 정확 매치, 폴더면 prefix 치환
-            if FAVORITES_FILE.exists():
-                try:
-                    favs = json.loads(FAVORITES_FILE.read_text(encoding="utf-8"))
-                    for f in favs:
-                        if f.get("project") != project:
-                            continue
-                        p = f.get("path", "")
-                        if was_dir:
-                            if p == old_rel or p.startswith(old_rel + "/"):
-                                f["path"] = new_rel + p[len(old_rel):]
-                        else:
-                            if p == old_rel:
-                                f["path"] = new_rel
-                    FAVORITES_FILE.write_text(
-                        json.dumps(favs, ensure_ascii=False, indent=2),
-                        encoding="utf-8",
-                    )
-                except Exception:
-                    pass
+            _sync_ledger_path(project_dir, old_rel, new_rel, is_dir=was_dir)
+            _sync_favorites_path(project, old_rel, new_rel, is_dir=was_dir)
+            _sync_colors_path(project, old_rel, new_rel, is_dir=was_dir)
+            _sync_jobs_path(project, old_rel, new_rel, is_dir=was_dir)
+            _sync_comments_path(project, old_rel, new_rel, is_dir=was_dir)
             self._send_json(200, {"name": new_name, "from": rel, "to": new_rel})
             return
 
         if path == "/api/reveal":
             if not self._check_same_origin():
                 self._send_json(403, {"error": "허용되지 않은 요청입니다."})
+                return
+            # LAN 노출 (bind 가 localhost 외) 인 경우 reveal 차단.
+            # 이유: 서버 PC 에 Explorer 가 떠도 LAN 사용자에겐 보이지 않고, 잠재적 보안 위험.
+            if BIND not in ("127.0.0.1", "localhost", "::1"):
+                self._send_json(403, {
+                    "error": "LAN 모드에서는 '원본 위치 열기' 가 비활성화됩니다.",
+                    "hint": "이 기능은 PV_BIND=127.0.0.1 (로컬 전용) 모드에서만 동작합니다.",
+                })
                 return
             length = int(self.headers.get("Content-Length", "0"))
             raw = self.rfile.read(length).decode("utf-8") if length else "{}"
@@ -855,29 +1094,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(500, {"error": f"이동 실패: {e}"})
                 return
             new_rel = str(dst.relative_to(project_dir)).replace("\\", "/")
-            # ledger (생성 메타) 키 동기화
-            try:
-                from spotlight import ledger as sp_ledger
-                sp_ledger.rename(project_dir, from_path, new_rel, is_dir=False)
-            except Exception:
-                pass
-            # favorites.json 에서 경로 자동 업데이트
-            if FAVORITES_FILE.exists():
-                try:
-                    favs = json.loads(FAVORITES_FILE.read_text(encoding="utf-8"))
-                    old_rel = from_path.replace("\\", "/")
-                    changed = False
-                    for f in favs:
-                        if f.get("project") == project and f.get("path") == old_rel:
-                            f["path"] = new_rel
-                            changed = True
-                    if changed:
-                        FAVORITES_FILE.write_text(
-                            json.dumps(favs, ensure_ascii=False, indent=2),
-                            encoding="utf-8",
-                        )
-                except Exception:
-                    pass
+            _sync_ledger_path(project_dir, from_path, new_rel, is_dir=False)
+            _sync_favorites_path(project, from_path, new_rel, is_dir=False)
+            _sync_colors_path(project, from_path, new_rel, is_dir=False)
+            _sync_jobs_path(project, from_path, new_rel, is_dir=False)
+            _sync_comments_path(project, from_path, new_rel, is_dir=False)
             self._send_json(200, {"name": src.name, "from": from_path, "to": new_rel})
             return
 
@@ -892,12 +1113,161 @@ class Handler(BaseHTTPRequestHandler):
             except json.JSONDecodeError:
                 self._send_json(400, {"error": "잘못된 JSON"})
                 return
-            FAVORITES_FILE.parent.mkdir(parents=True, exist_ok=True)
-            FAVORITES_FILE.write_text(
-                json.dumps(favs, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-            self._send_json(200, {"ok": True, "count": len(favs)})
+            # ?project=<name> 필수. 없으면 글로벌 통째 쓰기는 거부 (실수 방지).
+            project = (params.get("project") or [""])[0]
+            if not project:
+                self._send_json(400, {
+                    "error": "project 파라미터가 필요합니다.",
+                    "hint": "POST /api/favorites?project=<프로젝트이름> 으로 호출하세요.",
+                })
+                return
+            # 그 프로젝트 favorites 통째 덮어쓰기 (lock-safe)
+            from spotlight import favorites_store as _fs
+            try:
+                with _fs.FavoritesLock(project):
+                    _fs.save_favorites(project, favs)
+            except _fs.FavoritesLockTimeout:
+                self._send_json(503, {
+                    "error": "favorites 락 획득 실패 (다른 프로세스가 점유 중) — 잠시 후 재시도하세요.",
+                })
+                return
+            self._send_json(200, {"ok": True, "project": project, "count": len(favs)})
+            return
+
+        if path == "/api/colors":
+            # POST: {project, paths: [...], color: "red"|"green"|"blue"|null}
+            # color=null/"" 이면 해당 paths 의 entry 삭제.
+            if not self._check_same_origin():
+                self._send_json(403, {"error": "허용되지 않은 요청입니다."})
+                return
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length).decode("utf-8") if length else "{}"
+            try:
+                body = json.loads(raw)
+            except json.JSONDecodeError:
+                self._send_json(400, {"error": "잘못된 JSON"})
+                return
+            project = (body.get("project") or "").strip()
+            paths = body.get("paths") or []
+            color = body.get("color") or None
+            if not project:
+                self._send_json(400, {"error": "project 파라미터가 필요합니다."})
+                return
+            if not isinstance(paths, list):
+                self._send_json(400, {"error": "paths 는 배열이어야 합니다."})
+                return
+            try:
+                from spotlight import colors_store
+                colors = colors_store.set_colors_bulk(project, paths, color)
+            except ValueError as e:
+                self._send_json(400, {"error": str(e)})
+                return
+            self._send_json(200, {"ok": True, "project": project, "colors": colors})
+            return
+
+        if path == "/api/comments":
+            # POST: { project, path, author, text } → 새 코멘트 추가
+            if not self._check_same_origin():
+                self._send_json(403, {"error": "허용되지 않은 요청입니다."})
+                return
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length).decode("utf-8") if length else "{}"
+            try:
+                body = json.loads(raw)
+            except json.JSONDecodeError:
+                self._send_json(400, {"error": "잘못된 JSON"})
+                return
+            project = (body.get("project") or "").strip()
+            target_path = (body.get("path") or "").strip()
+            author = body.get("author") or ""
+            text = body.get("text") or ""
+            if not project or not target_path:
+                self._send_json(400, {"error": "project / path 가 필요합니다."})
+                return
+            from spotlight import comments_store
+            entry = comments_store.add(project, target_path, author, text)
+            if entry is None:
+                self._send_json(400, {"error": "본문이 비어 있습니다."})
+                return
+            self._send_json(200, {"ok": True, "comment": entry})
+            return
+
+        if path == "/api/comments/reply":
+            # POST: { project, path, parentId, author, text } → 기존 코멘트에 답글 추가
+            if not self._check_same_origin():
+                self._send_json(403, {"error": "허용되지 않은 요청입니다."})
+                return
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length).decode("utf-8") if length else "{}"
+            try:
+                body = json.loads(raw)
+            except json.JSONDecodeError:
+                self._send_json(400, {"error": "잘못된 JSON"})
+                return
+            project = (body.get("project") or "").strip()
+            target_path = (body.get("path") or "").strip()
+            parent_id = (body.get("parentId") or "").strip()
+            author = body.get("author") or ""
+            text = body.get("text") or ""
+            if not project or not target_path or not parent_id:
+                self._send_json(400, {"error": "project / path / parentId 가 필요합니다."})
+                return
+            from spotlight import comments_store
+            reply = comments_store.add_reply(project, target_path, parent_id, author, text)
+            if reply is None:
+                self._send_json(400, {"error": "답글 추가 실패 (부모 코멘트 없음 또는 빈 본문)"})
+                return
+            self._send_json(200, {"ok": True, "reply": reply})
+            return
+
+        if path == "/api/comments/delete":
+            # POST: { project, path, id } → 코멘트 1개 제거
+            if not self._check_same_origin():
+                self._send_json(403, {"error": "허용되지 않은 요청입니다."})
+                return
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length).decode("utf-8") if length else "{}"
+            try:
+                body = json.loads(raw)
+            except json.JSONDecodeError:
+                self._send_json(400, {"error": "잘못된 JSON"})
+                return
+            project = (body.get("project") or "").strip()
+            target_path = (body.get("path") or "").strip()
+            comment_id = (body.get("id") or "").strip()
+            if not project or not target_path or not comment_id:
+                self._send_json(400, {"error": "project / path / id 가 필요합니다."})
+                return
+            from spotlight import comments_store
+            ok = comments_store.delete(project, target_path, comment_id)
+            self._send_json(200, {"ok": ok})
+            return
+
+        if path == "/api/comments/update":
+            # POST: { project, path, id, text } → 본문 수정
+            if not self._check_same_origin():
+                self._send_json(403, {"error": "허용되지 않은 요청입니다."})
+                return
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length).decode("utf-8") if length else "{}"
+            try:
+                body = json.loads(raw)
+            except json.JSONDecodeError:
+                self._send_json(400, {"error": "잘못된 JSON"})
+                return
+            project = (body.get("project") or "").strip()
+            target_path = (body.get("path") or "").strip()
+            comment_id = (body.get("id") or "").strip()
+            text = body.get("text") or ""
+            if not project or not target_path or not comment_id:
+                self._send_json(400, {"error": "project / path / id 가 필요합니다."})
+                return
+            from spotlight import comments_store
+            ok = comments_store.update(project, target_path, comment_id, text)
+            if not ok:
+                self._send_json(400, {"error": "수정 실패 (본문이 비었거나 코멘트 없음)"})
+                return
+            self._send_json(200, {"ok": True})
             return
 
         if path != "/api/upload":
@@ -998,13 +1368,29 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    # favorites.json mtime watcher — 변경 감지 시 SSE broadcast
+    # favorites.json + spotlight_jobs.json mtime watcher — 변경 감지 시 SSE broadcast
     threading.Thread(target=_favorites_watcher, daemon=True).start()
+    threading.Thread(target=_jobs_watcher, daemon=True).start()
 
-    server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    # PV 재시작 시 옛 running entry 들은 추적 thread 가 죽었으므로 stale.
+    # job_ids 는 보존 — 사용자가 '↻ 결과 다시 가져오기' 로 복구 가능.
+    try:
+        from spotlight import jobs_log as _jl
+        cleaned = _jl.cleanup_stale_running()
+        if cleaned > 0:
+            print(f"  startup        : 옛 running entry {cleaned}개를 failed(stale) 로 정리 (job_ids 보존)")
+        # completed 인데 thumbnail/result_paths 가 stale (파일 이동/삭제 후 동기화 안 된 것) 정리.
+        missing_fixed = _jl.cleanup_missing_result_files()
+        if missing_fixed > 0:
+            print(f"  startup        : 잘못된 thumbnail path {missing_fixed}개 entry 정리")
+    except Exception as e:  # noqa: BLE001
+        print(f"[server] stale cleanup fail: {e}", file=sys.stderr)
+
+    server = ThreadingHTTPServer((BIND, PORT), Handler)
     print("=" * 60)
     print("프로젝트 뷰어 서버 시작")
-    print(f"  주소           : http://127.0.0.1:{PORT}")
+    print(f"  bind           : {BIND}:{PORT}")
+    print(f"  local          : http://127.0.0.1:{PORT}")
     print(f"  프로젝트 폴더  : {PROJECTS_DIR}")
     print(f"  프론트엔드 폴더: {FRONTEND_DIR}")
     print(f"  최대 업로드    : {MAX_UPLOAD_BYTES // 1024 // 1024}MB")

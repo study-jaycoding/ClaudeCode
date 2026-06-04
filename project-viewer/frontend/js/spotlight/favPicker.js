@@ -9,6 +9,7 @@ import { anchorPickerAbovePanel } from "./pickerLayout.js";
 import { state, cache, pickerState, sourceFavorites } from "./state.js";
 import { currentProject as viewerCurrentProject } from "../state.js";
 import { escapeHtml } from "./utils.js";
+import { kindFromPath } from "../utils.js";
 import { mediaUrl, favName } from "./refModel.js";
 import { isRefInDom, insertChipAtCaret, getAtQueryInfo } from "./prompt.js";
 import { fetchFavorites } from "./api.js";
@@ -34,7 +35,9 @@ export function isFavPickerOpen() {
 
 export async function loadFavorites() {
     try {
-        const data = await fetchFavorites();
+        // 현재 프로젝트의 favorites 만 로드.
+        const proj = viewerCurrentProject || state.project || "";
+        const data = await fetchFavorites(proj);
         cache.favorites = data.favorites || [];
     } catch {
         cache.favorites = [];
@@ -58,9 +61,23 @@ export function renderFavList() {
         base = base.filter((f) => Array.isArray(f.tags) && f.tags.includes(pickerState.tagFilter));
     }
 
-    pickerState.filteredFavs = filter
-        ? base.filter((f) => favName(f).toLowerCase().includes(filter) || f.project.toLowerCase().includes(filter))
-        : [...base];
+    if (filter) {
+        const matched = base.filter((f) =>
+            favName(f).toLowerCase().includes(filter) || (f.project || "").toLowerCase().includes(filter)
+        );
+        // 접두사 매치 우선 정렬: 파일명이 filter 로 시작 > 그 외 > 같으면 이름 순
+        matched.sort((a, b) => {
+            const an = favName(a).toLowerCase();
+            const bn = favName(b).toLowerCase();
+            const ap = an.startsWith(filter) ? 0 : 1;
+            const bp = bn.startsWith(filter) ? 0 : 1;
+            if (ap !== bp) return ap - bp;
+            return an.localeCompare(bn);
+        });
+        pickerState.filteredFavs = matched;
+    } else {
+        pickerState.filteredFavs = [...base];
+    }
 
     if (pickerState.filteredFavs.length === 0) {
         favList.innerHTML = "";
@@ -75,6 +92,13 @@ export function renderFavList() {
         return;
     }
     favEmpty.classList.add("hidden");
+    // 필터링된 결과가 있으면 첫 항목을 자동 하이라이트 (Enter 로 바로 확정 가능).
+    // 이전 highlight 가 범위 밖이거나 미설정(-1)이면 0 으로 리셋.
+    if (pickerState.filteredFavs.length > 0
+        && (pickerState.favHighlight < 0
+            || pickerState.favHighlight >= pickerState.filteredFavs.length)) {
+        pickerState.favHighlight = 0;
+    }
     favList.innerHTML = "";
     pickerState.filteredFavs.forEach((fav, i) => {
         const selected = isRefInDom(fav);
@@ -83,8 +107,18 @@ export function renderFavList() {
             + (selected ? " selected" : "")
             + (i === pickerState.favHighlight ? " highlight" : "");
         item.dataset.idx = i;
+        // 파일 종류에 맞는 썸네일 (이미지 = img, 비디오 = video, 그 외 = 아이콘)
+        const kind = kindFromPath(fav.path || "");
+        let thumbHtml;
+        if (kind === "video") {
+            thumbHtml = `<video class="fav-item-thumb" src="${mediaUrl(fav)}" preload="metadata" muted></video>`;
+        } else if (kind === "image") {
+            thumbHtml = `<img class="fav-item-thumb" src="${mediaUrl(fav)}" alt="" loading="lazy" />`;
+        } else {
+            thumbHtml = `<span class="fav-item-thumb fav-item-thumb-icon">📄</span>`;
+        }
         item.innerHTML = `
-            <img class="fav-item-thumb" src="${mediaUrl(fav)}" alt="" loading="lazy" />
+            ${thumbHtml}
             <span class="fav-item-name">${escapeHtml(favName(fav))}</span>
             <span class="fav-item-check">&#x2713;</span>`;
         item.addEventListener("click", (e) => {

@@ -1,0 +1,624 @@
+﻿{
+    "cinematic_studio_video_v2":  {
+                                      "display_name":  "Cinematic Studio Video V2",
+                                      "job_set_type":  "cinematic_studio_video_v2",
+                                      "params":  [
+                                                     {
+                                                         "name":  "aspect_ratio",
+                                                         "type":  "string",
+                                                         "default":  "16:9",
+                                                         "required":  false,
+                                                         "enum":  [
+                                                                      "1:1",
+                                                                      "4:3",
+                                                                      "3:4",
+                                                                      "16:9",
+                                                                      "9:16"
+                                                                  ]
+                                                     },
+                                                     {
+                                                         "name":  "duration",
+                                                         "type":  "integer",
+                                                         "default":  5,
+                                                         "required":  false
+                                                     },
+                                                     {
+                                                         "name":  "genre",
+                                                         "type":  "string",
+                                                         "default":  "auto",
+                                                         "required":  false,
+                                                         "enum":  [
+                                                                      "auto",
+                                                                      "action",
+                                                                      "horror",
+                                                                      "comedy",
+                                                                      "western",
+                                                                      "suspense",
+                                                                      "intimate",
+                                                                      "spectacle"
+                                                                  ]
+                                                     },
+                                                     {
+                                                         "name":  "medias",
+                                                         "type":  "array",
+                                                         "default":  null,
+                                                         "required":  false
+                                                     },
+                                                     {
+                                                         "name":  "mode",
+                                                         "type":  "string",
+                                                         "default":  "std",
+                                                         "required":  false,
+                                                         "enum":  [
+                                                                      "pro",
+                                                                      "std"
+                                                                  ]
+                                                     },
+                                                     {
+                                                         "name":  "prompt",
+                                                         "type":  "string",
+                                                         "default":  null,
+                                                         "required":  true
+                                                     }
+                                                 ],
+                                      "type":  "video"
+                                  },
+    "minimax_hailuo":  {
+                           "display_name":  "Minimax Hailuo",
+                           "job_set_type":  "minimax_hailuo",
+                           "params":  [
+                                          {
+                                              "name":  "duration",
+                                              "type":  "string",
+                                              "default":  6,
+                                              "required":  false,
+                                              "enum":  [
+                                                           "6",
+                                                           "10"
+                                                       ]
+                                          },
+                                          {
+                                              "name":  "input_images",
+                                              "type":  "array",
+                                              "default":  null,
+                                              "required":  false
+                                          },
+                                          {
+                                              "name":  "model",
+                                              "type":  "string",
+                                              "default":  "minimax-2.3",
+                                              "required":  false,
+                                              "enum":  [
+                                                           "minimax",
+                                                           "minimax-fast",
+                                                           "minimax-2.3",
+                                                           "minimax-2.3-fast"
+                                                       ]
+                                          },
+                                          {
+                                              "name":  "prompt",
+                                              "type":  "string",
+                                              "default":  null,
+                                              "required":  true
+                                          },
+                                          {
+                                              "name":  "resolution",
+                                              "type":  "string",
+                                              "default":  "768",
+                                              "required":  false,
+                                              "enum":  [
+                                                           "512",
+                                                           "768",
+                                                           "1080"
+                                                       ]
+                                          }
+                                      ],
+                           "type":  "video"
+                       },
+    "seedance1_5":  {
+                        "display_name":  "Seedance 1.5 Pro",
+                        "job_set_type":  "seedance1_5",
+                        "params":  [
+                                       {
+                                           "name":  "aspect_ratio",
+                                           "type":  "string",
+                                           "default":  "16:9",
+                                           "required":  false,
+                                           "enum":  [
+                                                        "auto",
+                                                        "16:9",
+                                                        "9:16",
+                                                        "4:3",
+                                                        "3:4",
+                                                        "1:1",
+                                                        "21:9"
+                                                    ]
+                                       },
+                                       {
+                                           "name":  "duration",
+                                           "type":  "string",
+                                           "default":  4,
+                                           "required":  false,
+                                           "enum":  [
+                                                        "4",
+                                                        "8",
+                                                        "12"
+                                                    ]
+                                       },
+                                       {
+                                           "name":  "medias",
+                                           "type":  "array",
+                                           "default":  null,
+                                           "required":  false
+                                       },
+                                       {
+                                           "name":  "prompt",
+                                           "type":  "string",
+                                           "default":  null,
+                                           "required":  true
+                                       },
+                                       {
+                                           "name":  "resolution",
+                                           "type":  "string",
+                                           "default":  "720p",
+                                           "required":  false,
+                                           "enum":  [
+                                                        "480p",
+                                                        "720p",
+                                                        "1080p"
+                                                    ]
+                                       }
+                                   ],
+                        "type":  "video"
+                    },
+    "veo3_1":  {
+                   "display_name":  "Google Veo 3.1",
+                   "job_set_type":  "veo3_1",
+                   "params":  [
+                                  {
+                                      "name":  "aspect_ratio",
+                                      "type":  "string",
+                                      "default":  "16:9",
+                                      "required":  false,
+                                      "enum":  [
+                                                   "16:9",
+                                                   "9:16"
+                                               ]
+                                  },
+                                  {
+                                      "name":  "duration",
+                                      "type":  "string",
+                                      "default":  8,
+                                      "required":  false,
+                                      "enum":  [
+                                                   "4",
+                                                   "6",
+                                                   "8"
+                                               ]
+                                  },
+                                  {
+                                      "name":  "input_image",
+                                      "type":  "object",
+                                      "default":  null,
+                                      "required":  false
+                                  },
+                                  {
+                                      "name":  "model",
+                                      "type":  "string",
+                                      "default":  "veo-3-1-fast",
+                                      "required":  false,
+                                      "enum":  [
+                                                   "veo-3-1-preview",
+                                                   "veo-3-1-fast"
+                                               ]
+                                  },
+                                  {
+                                      "name":  "prompt",
+                                      "type":  "string",
+                                      "default":  null,
+                                      "required":  true
+                                  },
+                                  {
+                                      "name":  "quality",
+                                      "type":  "string",
+                                      "default":  "basic",
+                                      "required":  false,
+                                      "enum":  [
+                                                   "basic",
+                                                   "high",
+                                                   "ultra"
+                                               ]
+                                  }
+                              ],
+                   "type":  "video"
+               },
+    "veo3":  {
+                 "display_name":  "Google Veo 3",
+                 "job_set_type":  "veo3",
+                 "params":  [
+                                {
+                                    "name":  "aspect_ratio",
+                                    "type":  "string",
+                                    "default":  "16:9",
+                                    "required":  false,
+                                    "enum":  [
+                                                 "16:9",
+                                                 "9:16"
+                                             ]
+                                },
+                                {
+                                    "name":  "input_image",
+                                    "type":  "object",
+                                    "default":  null,
+                                    "required":  true
+                                },
+                                {
+                                    "name":  "model",
+                                    "type":  "string",
+                                    "default":  "veo-3-fast",
+                                    "required":  false,
+                                    "enum":  [
+                                                 "veo-3-preview",
+                                                 "veo-3-fast"
+                                             ]
+                                },
+                                {
+                                    "name":  "prompt",
+                                    "type":  "string",
+                                    "default":  null,
+                                    "required":  true
+                                }
+                            ],
+                 "type":  "video"
+             },
+    "wan2_7":  {
+                   "display_name":  "Wan 2.7",
+                   "job_set_type":  "wan2_7",
+                   "params":  [
+                                  {
+                                      "name":  "aspect_ratio",
+                                      "type":  "string",
+                                      "default":  "16:9",
+                                      "required":  false,
+                                      "enum":  [
+                                                   "16:9",
+                                                   "9:16",
+                                                   "1:1",
+                                                   "4:3",
+                                                   "3:4"
+                                               ]
+                                  },
+                                  {
+                                      "name":  "duration",
+                                      "type":  "integer",
+                                      "default":  5,
+                                      "required":  false
+                                  },
+                                  {
+                                      "name":  "medias",
+                                      "type":  "array",
+                                      "default":  null,
+                                      "required":  false
+                                  },
+                                  {
+                                      "name":  "prompt",
+                                      "type":  "string",
+                                      "default":  null,
+                                      "required":  true
+                                  },
+                                  {
+                                      "name":  "resolution",
+                                      "type":  "string",
+                                      "default":  "720p",
+                                      "required":  false,
+                                      "enum":  [
+                                                   "720p",
+                                                   "1080p"
+                                               ]
+                                  }
+                              ],
+                   "type":  "video"
+               },
+    "kling3_0":  {
+                     "display_name":  "Kling v3.0",
+                     "job_set_type":  "kling3_0",
+                     "params":  [
+                                    {
+                                        "name":  "aspect_ratio",
+                                        "type":  "string",
+                                        "default":  "16:9",
+                                        "required":  false,
+                                        "enum":  [
+                                                     "16:9",
+                                                     "9:16",
+                                                     "1:1"
+                                                 ]
+                                    },
+                                    {
+                                        "name":  "duration",
+                                        "type":  "integer",
+                                        "default":  5,
+                                        "required":  false
+                                    },
+                                    {
+                                        "name":  "medias",
+                                        "type":  "array",
+                                        "default":  null,
+                                        "required":  false
+                                    },
+                                    {
+                                        "name":  "mode",
+                                        "type":  "string",
+                                        "default":  "std",
+                                        "required":  false,
+                                        "enum":  [
+                                                     "pro",
+                                                     "std",
+                                                     "4k"
+                                                 ]
+                                    },
+                                    {
+                                        "name":  "prompt",
+                                        "type":  "string",
+                                        "default":  null,
+                                        "required":  true
+                                    },
+                                    {
+                                        "name":  "sound",
+                                        "type":  "string",
+                                        "default":  "on",
+                                        "required":  false,
+                                        "enum":  [
+                                                     "on",
+                                                     "off"
+                                                 ]
+                                    }
+                                ],
+                     "type":  "video"
+                 },
+    "grok_video":  {
+                       "display_name":  "Grok Video",
+                       "job_set_type":  "grok_video",
+                       "params":  [
+                                      {
+                                          "name":  "aspect_ratio",
+                                          "type":  "string",
+                                          "default":  "16:9",
+                                          "required":  false,
+                                          "enum":  [
+                                                       "16:9",
+                                                       "9:16",
+                                                       "1:1"
+                                                   ]
+                                      },
+                                      {
+                                          "name":  "duration",
+                                          "type":  "integer",
+                                          "default":  5,
+                                          "required":  false
+                                      },
+                                      {
+                                          "name":  "medias",
+                                          "type":  "array",
+                                          "default":  null,
+                                          "required":  false
+                                      },
+                                      {
+                                          "name":  "prompt",
+                                          "type":  "string",
+                                          "default":  null,
+                                          "required":  true
+                                      }
+                                  ],
+                       "type":  "video"
+                   },
+    "wan2_6":  {
+                   "display_name":  "Wan 2.6 Video",
+                   "job_set_type":  "wan2_6",
+                   "params":  [
+                                  {
+                                      "name":  "aspect_ratio",
+                                      "type":  "string",
+                                      "default":  "16:9",
+                                      "required":  false,
+                                      "enum":  [
+                                                   "16:9",
+                                                   "9:16",
+                                                   "1:1"
+                                               ]
+                                  },
+                                  {
+                                      "name":  "duration",
+                                      "type":  "string",
+                                      "default":  5,
+                                      "required":  false,
+                                      "enum":  [
+                                                   "5",
+                                                   "10",
+                                                   "15"
+                                               ]
+                                  },
+                                  {
+                                      "name":  "medias",
+                                      "type":  "array",
+                                      "default":  null,
+                                      "required":  false
+                                  },
+                                  {
+                                      "name":  "prompt",
+                                      "type":  "string",
+                                      "default":  null,
+                                      "required":  true
+                                  },
+                                  {
+                                      "name":  "quality",
+                                      "type":  "string",
+                                      "default":  "720p",
+                                      "required":  false,
+                                      "enum":  [
+                                                   "720p",
+                                                   "1080p"
+                                               ]
+                                  }
+                              ],
+                   "type":  "video"
+               },
+    "cinematic_studio_3_0":  {
+                                 "display_name":  "Cinematic Studio 3.0",
+                                 "job_set_type":  "cinematic_studio_3_0",
+                                 "params":  [
+                                                {
+                                                    "name":  "aspect_ratio",
+                                                    "type":  "string",
+                                                    "default":  "16:9",
+                                                    "required":  false,
+                                                    "enum":  [
+                                                                 "16:9",
+                                                                 "9:16",
+                                                                 "1:1"
+                                                             ]
+                                                },
+                                                {
+                                                    "name":  "duration",
+                                                    "type":  "integer",
+                                                    "default":  5,
+                                                    "required":  false
+                                                },
+                                                {
+                                                    "name":  "medias",
+                                                    "type":  "array",
+                                                    "default":  null,
+                                                    "required":  false
+                                                },
+                                                {
+                                                    "name":  "prompt",
+                                                    "type":  "string",
+                                                    "default":  null,
+                                                    "required":  true
+                                                }
+                                            ],
+                                 "type":  "video"
+                             },
+    "seedance_2_0":  {
+                         "display_name":  "Seedance 2.0",
+                         "job_set_type":  "seedance_2_0",
+                         "params":  [
+                                        {
+                                            "name":  "aspect_ratio",
+                                            "type":  "string",
+                                            "default":  "16:9",
+                                            "required":  false,
+                                            "enum":  [
+                                                         "auto",
+                                                         "16:9",
+                                                         "9:16",
+                                                         "4:3",
+                                                         "3:4",
+                                                         "1:1",
+                                                         "21:9"
+                                                     ]
+                                        },
+                                        {
+                                            "name":  "duration",
+                                            "type":  "integer",
+                                            "default":  5,
+                                            "required":  false
+                                        },
+                                        {
+                                            "name":  "genre",
+                                            "type":  "string",
+                                            "default":  "auto",
+                                            "required":  false,
+                                            "enum":  [
+                                                         "auto",
+                                                         "action",
+                                                         "horror",
+                                                         "comedy",
+                                                         "noir",
+                                                         "drama",
+                                                         "epic"
+                                                     ]
+                                        },
+                                        {
+                                            "name":  "medias",
+                                            "type":  "array",
+                                            "default":  null,
+                                            "required":  false
+                                        },
+                                        {
+                                            "name":  "mode",
+                                            "type":  "string",
+                                            "default":  "std",
+                                            "required":  false,
+                                            "enum":  [
+                                                         "std",
+                                                         "fast"
+                                                     ]
+                                        },
+                                        {
+                                            "name":  "prompt",
+                                            "type":  "string",
+                                            "default":  null,
+                                            "required":  true
+                                        },
+                                        {
+                                            "name":  "resolution",
+                                            "type":  "string",
+                                            "default":  "720p",
+                                            "required":  false,
+                                            "enum":  [
+                                                         "480p",
+                                                         "720p",
+                                                         "1080p"
+                                                     ]
+                                        }
+                                    ],
+                         "type":  "video"
+                     },
+    "kling2_6":  {
+                     "display_name":  "Kling 2.6 Video",
+                     "job_set_type":  "kling2_6",
+                     "params":  [
+                                    {
+                                        "name":  "aspect_ratio",
+                                        "type":  "string",
+                                        "default":  "16:9",
+                                        "required":  false,
+                                        "enum":  [
+                                                     "16:9",
+                                                     "9:16",
+                                                     "1:1"
+                                                 ]
+                                    },
+                                    {
+                                        "name":  "duration",
+                                        "type":  "string",
+                                        "default":  5,
+                                        "required":  false,
+                                        "enum":  [
+                                                     "5",
+                                                     "10"
+                                                 ]
+                                    },
+                                    {
+                                        "name":  "input_image",
+                                        "type":  "object",
+                                        "default":  null,
+                                        "required":  false
+                                    },
+                                    {
+                                        "name":  "prompt",
+                                        "type":  "string",
+                                        "default":  null,
+                                        "required":  true
+                                    },
+                                    {
+                                        "name":  "sound",
+                                        "type":  "boolean",
+                                        "default":  true,
+                                        "required":  false
+                                    }
+                                ],
+                     "type":  "video"
+                 }
+}

@@ -4,6 +4,27 @@ import { promptInput } from "./dom.js";
 import { escapeHtml } from "./utils.js";
 import { mediaUrl, favName, favKey } from "./refModel.js";
 
+// ── placeholder 표시 토글 ─────────────────────────────────────────
+// CSS :empty 는 브라우저가 contenteditable 안에 자동 삽입한 <br> 이나
+// zero-width space 가 있으면 정확히 안 잡힘 → chip/실제 텍스트 존재 여부를
+// 직접 판정해 data-empty 속성으로 토글. CSS 는 이 속성을 본다.
+function _hasMeaningfulContent() {
+    if (promptInput.querySelector(".inline-ref")) return true;
+    const txt = (promptInput.textContent || "")
+        .replace(/[​ \s]/g, "");  // zero-width, NBSP, 공백 제거
+    return txt.length > 0;
+}
+function _updatePlaceholderState() {
+    promptInput.toggleAttribute("data-empty", !_hasMeaningfulContent());
+}
+// 최초 1회 + 모든 mutation 자동 감지.
+_updatePlaceholderState();
+new MutationObserver(_updatePlaceholderState).observe(promptInput, {
+    childList: true, subtree: true, characterData: true,
+});
+// IME composition 중에는 textContent 가 임시로 비어보일 수 있어 input 도 함께 듣는다.
+promptInput.addEventListener("input", _updatePlaceholderState);
+
 export function getPromptText() {
     let text = "";
     function walk(node) {
@@ -93,7 +114,9 @@ function getTriggerQueryInfo(char) {
 }
 
 export function getAtQueryInfo() { return getTriggerQueryInfo("@"); }
-export function getSlashQueryInfo() { return getTriggerQueryInfo("/"); }
+// 태그 picker 트리거 — `/` 였으나 `` ` `` (backtick) 으로 변경.
+// 함수명은 외부 import 영향 줄이려 그대로 유지.
+export function getSlashQueryInfo() { return getTriggerQueryInfo("`"); }
 
 export function stripAtQuery() {
     const at = getAtQueryInfo();
@@ -152,7 +175,7 @@ export function insertChipAtCaret(ref, replaceAtQuery) {
     range.insertNode(chip);
 
     // 칩 뒤에 공백 + 앞에 zero-width space 로 IME 컨텍스트 분리
-    const space = document.createTextNode("  ");
+    const space = document.createTextNode(" ");
     chip.parentNode.insertBefore(space, chip.nextSibling);
     const beforeText = document.createTextNode("​");
     chip.parentNode.insertBefore(beforeText, chip);

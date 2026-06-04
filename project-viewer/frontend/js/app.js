@@ -8,18 +8,29 @@
 // =====================================================================
 import { escapeHtml } from "./utils.js";
 import {
-    projectSelect, refreshBtn, fileTree, previewContent,
+    projectSelect, fileTree, previewContent,
 } from "./dom.js";
-import { apiListProjects, apiGetTree } from "./api.js";
+import { apiListProjects, apiGetTree, apiGetColors } from "./api.js";
+import { setColors } from "./state.js";
+
+/** 프로젝트의 카드 컬러 마커를 backend 에서 로드해 state.colors 에 cache. */
+async function initColors(project) {
+    try {
+        const data = await apiGetColors(project);
+        setColors(data?.colors || {});
+    } catch {
+        setColors({});
+    }
+}
 
 import { setRefreshGridCallback } from "./view-controls.js";
 import {
-    initFavorites,
+    initFavorites, updateFavCount, updateCardNewBadges, isOwnPersistRecent,
     setPreviewCallback, setSourceGridCallback,
 } from "./favorites.js";
 import { setCloseContextPopupCallback } from "./selection.js";
 import {
-    renderTree,
+    renderTree, setActiveLabelByPath,
     setShowFolderGridCallback as setTreeShowFolderGridCallback,
     setOpenTreeMenuCallback, setMoveFileCallback, setCreateFolderInsideCallback,
 } from "./tree.js";
@@ -36,20 +47,25 @@ import {
 import {
     showFolderGrid, showSourceGrid, showGeneratedGrid,
     preview, clearPreview, reloadTreeAndShow,
-    setGenTreeContextOpener,
+    setGenTreeContextOpener, setColorRefreshGridCallback,
 } from "./grid.js";
 import {
     setReloadTreeAndShowCallback as setUploadReloadTreeAndShowCallback,
 } from "./upload.js";
-import { startSSE, setSSECallback } from "./sse.js";
+import { startSSE, setSSECallback, setJobsSSECallback } from "./sse.js";
+import { refreshQueue } from "./queue.js";
 
 // 사이드 효과 전용 (handler 등록만) — import 만으로 동작
 import "./keyboard.js";
+import "./viewer-tab.js";
+import "./comments.js";
 import "./tabs.js";
+import "./panel-search.js";
+import "./sidebar-resize.js";
 
 import {
-    currentProject, setCurrentProject,
-    currentDir, setCurrentDir,
+    currentProject, setCurrentProject, getLastProject,
+    currentDir, setCurrentDir, getLastDirForProject,
     rootTree, setRootTree,
     activeTagFilter,
     activeTab,
@@ -66,12 +82,20 @@ function refreshCurrentGrid() {
         showSourceGrid(activeTagFilter);
     } else if (activeTab === "generated") {
         showGeneratedGrid();
+    } else if (activeTab === "queue") {
+        refreshQueue();
+    } else if (activeTab === "viewer") {
+        // 보기 탭은 split — 위: 생성 그리드 (showGeneratedGrid) / 아래: viewer-stage.
+        // 필터 변경 시 둘 다 다시 그려야 함.
+        showGeneratedGrid();
+        import("./viewer-tab.js").then(({ showViewer }) => showViewer());
     } else if (currentProject && rootTree) {
         const node = findNodeByPath(rootTree, currentDir) || rootTree;
         showFolderGrid(currentProject, node);
     }
 }
 setRefreshGridCallback(refreshCurrentGrid);
+setColorRefreshGridCallback(refreshCurrentGrid);
 
 // favorites 모듈에 외부 의존성 주입
 setPreviewCallback((project, node) => preview(project, node));
@@ -81,7 +105,7 @@ setSourceGridCallback((tag) => showSourceGrid(tag));
 setCloseContextPopupCallback(() => closeContextPopup());
 setTreeShowFolderGridCallback((project, node) => showFolderGrid(project, node));
 setOpenTreeMenuCallback((mx, my, project, paths, opts) => openTreeMenu(mx, my, project, paths, opts));
-setMoveFileCallback((project, fromPath, toDir) => moveFile(project, fromPath, toDir));
+setMoveFileCallback((project, fromPath, toDir, silent) => moveFile(project, fromPath, toDir, silent));
 setCreateFolderInsideCallback((project, dirPath) => createDefaultFolderInside(project, dirPath));
 
 setOpenTreeMenuForPopupCallback((mx, my, project, paths, opts) => openTreeMenu(mx, my, project, paths, opts));
@@ -99,10 +123,32 @@ setLoadTreeCallback((project) => loadTree(project));
 setUploadReloadTreeAndShowCallback((project, dir) => reloadTreeAndShow(project, dir));
 
 // SSE — favorites / generated 자동 새로고침
+// 짧은 시간 안의 연속 변경(다중 파일 저장 등) 은 합쳐서 한 번만 갱신 (디바운스 250ms)
+// 자기 자신이 방금 persist 해서 발화된 SSE 는 무시 — 그렇지 않으면 fetch 가
+// 진행 중인 다른 mutation 의 결과를 덮어쓸 수 있음 (seenAt 사라지는 race).
+let _sseTimer = null;
 setSSECallback(() => {
-    if (activeTab === "generated") showGeneratedGrid();
-    if (activeTab === "favorites") { renderFavorites(); showSourceGrid(activeTagFilter); }
-    initFavorites();
+    if (_sseTimer) clearTimeout(_sseTimer);
+    _sseTimer = setTimeout(() => {
+        _sseTimer = null;
+        if (isOwnPersistRecent()) return;
+        if (activeTab === "generated") showGeneratedGrid();
+        if (activeTab === "favorites") { renderFavorites(); showSourceGrid(activeTagFilter); }
+        initFavorites();
+        // spotlight 가 자체 cache.favorites 를 가지고 있으므로 함께 갱신해야
+        // 드롭 시 isSource 판정이 정확. (없으면 source 카드를 ref 가 아닌
+        // sidecar 복원 흐름으로 잘못 처리해 프롬프트가 덮어쓰여짐.)
+        try { window.dispatchEvent(new CustomEvent("pv:favorites-changed")); } catch {}
+    }, 250);
+});
+// jobs-changed: Queue 탭이 active 이면 즉시 갱신, 아니면 running 카운트만 갱신.
+let _jobsTimer = null;
+setJobsSSECallback(() => {
+    if (_jobsTimer) clearTimeout(_jobsTimer);
+    _jobsTimer = setTimeout(() => {
+        _jobsTimer = null;
+        refreshQueue();
+    }, 200);
 });
 startSSE();
 
@@ -112,6 +158,9 @@ startSSE();
 
 async function loadProjects() {
     try {
+        // setCurrentProject("") 가 localStorage 값을 지우므로 먼저 읽어둠.
+        const last = getLastProject();
+
         const data = await apiListProjects();
         const projects = data.projects || [];
         if (projects.length === 0) {
@@ -128,6 +177,12 @@ async function loadProjects() {
         setCurrentProject("");
         setCurrentDir("");
         setRootTree(null);
+
+        // 직전에 작업하던 프로젝트가 있고 목록에도 있으면 자동 로드
+        if (last && projects.some((p) => p.name === last)) {
+            projectSelect.value = last;
+            await loadTree(last);
+        }
     } catch (err) {
         projectSelect.innerHTML = `<option value="">(불러오기 실패)</option>`;
         console.error(err);
@@ -141,8 +196,10 @@ async function loadTree(project) {
         setCurrentProject("");
         setCurrentDir("");
         setRootTree(null);
-        // 프로젝트가 바뀌었으니 사이드바 즐겨찾기 + 활성 탭 그리드 모두 갱신.
+        // 프로젝트가 바뀌었으니 사이드바 즐겨찾기 + 활성 탭 그리드 + 카운트 모두 갱신.
         renderFavorites();
+        updateFavCount();
+        updateCardNewBadges();
         refreshCurrentGrid();
         return;
     }
@@ -156,11 +213,21 @@ async function loadTree(project) {
         setCurrentProject(project);
         setRootTree(data.tree);
         renderTree(rootTree, project);
-        setCurrentDir("");
-        showFolderGrid(project, rootTree);
+        // 프로젝트별 분리된 favorites + colors 를 새로 로드 (이 프로젝트만)
+        await Promise.all([initFavorites(), initColors(project)]);
+        // 직전에 보던 폴더 복원 — 트리에 존재하지 않으면 루트.
+        const savedDir = getLastDirForProject(project);
+        const targetNode = (savedDir && findNodeByPath(rootTree, savedDir)) || rootTree;
+        setCurrentDir(targetNode.path || "");
+        showFolderGrid(project, targetNode);
+        // 트리에서도 그 폴더에 active 표시
+        if (targetNode.path) setActiveLabelByPath(targetNode.path, true);
         // 소스 탭에 있을 때 다른 프로젝트로 바꾸면 그리드도 새 프로젝트 기준으로.
+        // NEW 카운트도 프로젝트별이라 같이 갱신.
         renderFavorites();
-        if (activeTab === "favorites" || activeTab === "generated") {
+        updateFavCount();
+        updateCardNewBadges();
+        if (activeTab === "favorites" || activeTab === "generated" || activeTab === "viewer") {
             refreshCurrentGrid();
         }
     } catch (err) {
@@ -216,17 +283,10 @@ previewContent.addEventListener("drop", async (e) => {
 });
 
 
-refreshBtn.addEventListener("click", async () => {
-    const current = projectSelect.value;
-    await loadProjects();
-    if (current) {
-        projectSelect.value = current;
-        loadTree(current);
-    }
-});
-
 // 이전 버전의 activeSource localStorage 잔재 정리 (1회성)
 try { localStorage.removeItem("viewer.activeSource"); } catch {}
 
 // 서버에서 즐겨찾기 로드 후 프로젝트 목록 로드
 initFavorites().then(() => loadProjects());
+// Queue 카운트/리스트 초기 로드 — currentProject 와 무관하게 즉시 호출 가능
+refreshQueue();
