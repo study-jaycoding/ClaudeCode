@@ -166,9 +166,9 @@ function _renderPickerCard(node) {
     el.className = "vp-card vp-card-file" + (color ? " vp-color-" + color : "");
     el.draggable = true;
     el.dataset.path = node.path;
-    const url = `/media?project=${encodeURIComponent(currentProject)}&path=${encodeURIComponent(node.path)}`;
+    const url = `/thumb?project=${encodeURIComponent(currentProject)}&path=${encodeURIComponent(node.path)}`;
     const thumb = node.kind === "video"
-        ? `<video class="vp-thumb" data-lazy-src="${url}" preload="none" muted></video>`
+        ? `<video class="vp-thumb" data-lazy-poster="${url}" preload="none" muted></video>`
         : `<img class="vp-thumb" data-lazy-src="${url}" alt="" loading="lazy" />`;
     const badge = node.kind === "video" ? "▶" : "🖼";
     el.innerHTML = `

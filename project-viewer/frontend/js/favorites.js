@@ -689,7 +689,7 @@ export function renderFavoritesItems() {
 
 function renderFavItem(fav) {
     const kind = kindFromPath(fav.path);
-    const url = `/media?project=${encodeURIComponent(fav.project)}&path=${encodeURIComponent(fav.path)}`;
+    const url = `/thumb?project=${encodeURIComponent(fav.project)}&path=${encodeURIComponent(fav.path)}`;
     const isNew = isCardNew(fav.project, fav.path);
     const li = document.createElement("li");
     li.className = "fav-item"
@@ -701,7 +701,8 @@ function renderFavItem(fav) {
     if (kind === "image") {
         thumbHtml = `<img data-lazy-src="${url}" loading="lazy" alt="" />`;
     } else if (kind === "video") {
-        thumbHtml = `<video data-lazy-src="${url}" preload="none" muted></video>`;
+        // 카드 비디오는 재생 X — poster 만 (디코드 0)
+        thumbHtml = `<video data-lazy-poster="${url}" preload="none" muted></video>`;
     } else {
         thumbHtml = `<span>📄</span>`;
     }

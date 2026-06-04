@@ -62,17 +62,16 @@ function _statusBadge(status) {
 }
 
 function _thumbHtml(job) {
-    // 1순위: 로컬 다운로드 완료된 파일 (가장 빠른 표시 + 오프라인 OK)
+    // 1순위: 로컬 다운로드 완료된 파일 — 서버 /thumb 사용 (한 번 생성 후 디스크 캐시)
     const path = job.thumbnail_path;
     if (path && job.project) {
-        const url = `/media?project=${encodeURIComponent(job.project)}&path=${encodeURIComponent(path)}`;
+        const url = `/thumb?project=${encodeURIComponent(job.project)}&path=${encodeURIComponent(path)}`;
         if (job.kind === "video") {
-            return `<video class="q-thumb" data-lazy-src="${url}" preload="none" muted></video>`;
+            return `<video class="q-thumb" data-lazy-poster="${url}" preload="none" muted></video>`;
         }
         return `<img class="q-thumb" data-lazy-src="${url}" alt="" loading="lazy" />`;
     }
-    // 2순위: 다운로드 실패했지만 HF CDN URL 이 살아있는 경우 — 그 URL 로 직접 표시.
-    // 사용자가 결과를 본 채로 "↻ 결과 가져오기" 로 다운로드 재시도 가능.
+    // 2순위: HF CDN URL — 서버 thumb 불가 (외부 URL). 원본 그대로 lazy 표시.
     const urls = job.result_urls || [];
     if (urls.length > 0) {
         const u = urls[0];

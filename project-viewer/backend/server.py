@@ -778,6 +778,50 @@ class Handler(BaseHTTPRequestHandler):
             self._send_media(target)
             return
 
+        if path == "/thumb":
+            # 서버 사이드 썸네일 — 원본 디코드 회피. 한 번 생성 후 디스크 영구 캐시.
+            project = params.get("project", [""])[0]
+            rel = params.get("path", [""])[0]
+            try:
+                size = int(params.get("size", ["800"])[0])
+            except ValueError:
+                size = 800
+            project_dir = safe_project_dir(project)
+            if project_dir is None:
+                self.send_error(404, "Not Found"); return
+            src = safe_resolve(project_dir, rel)
+            if src is None or not src.is_file():
+                self.send_error(404, "Not Found"); return
+            # 모듈 import 는 첫 호출 시 — startup 안 막음
+            from spotlight import thumbs
+
+            def _resolver(p: str, r: str):
+                pd = safe_project_dir(p)
+                return safe_resolve(pd, r) if pd else None
+
+            thumb_path = thumbs.ensure_thumb(project, rel, size, src_resolver=_resolver)
+            if thumb_path is None:
+                # 생성 실패 (Pillow 없음 / ffmpeg 없음 / 손상 파일 등) — 원본 그대로 응답
+                self._send_media(src); return
+
+            stat = thumb_path.stat()
+            etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
+            if self.headers.get("If-None-Match") == etag:
+                self.send_response(304)
+                self.send_header("ETag", etag)
+                self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+                self.end_headers()
+                return
+            data = thumb_path.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+            self.send_header("ETag", etag)
+            self.end_headers()
+            self.wfile.write(data)
+            return
+
         # 루트 → index.html
         if path in ("/", ""):
             self._send_static(FRONTEND_DIR / "index.html")

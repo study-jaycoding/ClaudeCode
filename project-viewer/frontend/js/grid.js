@@ -482,12 +482,14 @@ function renderGridCard(project, child) {
     card.title = `${child.path} · ${humanSize(child.size)}`;
     const url = `/media?project=${encodeURIComponent(project)}&path=${encodeURIComponent(child.path)}`;
 
+    // 카드 썸네일은 서버 사전 생성 (/thumb endpoint). 원본 (/media) 은 재생/원본 보기용.
+    const thumbUrl = `/thumb?project=${encodeURIComponent(project)}&path=${encodeURIComponent(child.path)}`;
     let thumbInner;
     if (child.kind === "image") {
-        thumbInner = `<img data-lazy-src="${url}" alt="" loading="lazy" />`;
+        thumbInner = `<img data-lazy-src="${thumbUrl}" alt="" loading="lazy" />`;
     } else if (child.kind === "video") {
-        // viewport 진입 시에만 metadata 로드 — lazy-media.js 의 IO 가 처리.
-        thumbInner = `<video data-lazy-src="${url}" preload="none" muted></video>
+        // 카드는 재생 X — poster 만 표시 → 디코드 0. viewport gate 는 lazy-media.js IO.
+        thumbInner = `<video data-lazy-poster="${thumbUrl}" preload="none" muted></video>
                       <div class="play-badge">▶</div>`;
     } else if (child.kind === "text") {
         thumbInner = `<div class="thumb-icon">📄</div>`;
@@ -630,12 +632,12 @@ function renderSourceCard(fav, kind) {
     card.title = `${fav.path} · ID: ${fav.id}`;
     card.dataset.path = fav.path;
 
-    const url = `/media?project=${encodeURIComponent(fav.project)}&path=${encodeURIComponent(fav.path)}`;
+    const thumbUrl = `/thumb?project=${encodeURIComponent(fav.project)}&path=${encodeURIComponent(fav.path)}`;
     let thumbInner;
     if (kind === "image") {
-        thumbInner = `<img data-lazy-src="${url}" alt="" loading="lazy" />`;
+        thumbInner = `<img data-lazy-src="${thumbUrl}" alt="" loading="lazy" />`;
     } else if (kind === "video") {
-        thumbInner = `<video data-lazy-src="${url}" preload="none" muted></video><div class="play-badge">▶</div>`;
+        thumbInner = `<video data-lazy-poster="${thumbUrl}" preload="none" muted></video><div class="play-badge">▶</div>`;
     } else {
         thumbInner = `<div class="thumb-icon">📄</div>`;
     }
