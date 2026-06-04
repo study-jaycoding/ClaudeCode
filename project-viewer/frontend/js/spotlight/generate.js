@@ -85,8 +85,14 @@ export async function doGenerate() {
 
     try {
         const displayPrompt = getPromptDisplayText();
-        // 저장 폴더 — 사용자가 현재 열어둔 폴더에 저장. 비어있으면 기본 Result/.
-        const targetSubdir = (viewerCurrentDir || "Result").replace(/\\/g, "/");
+        // 저장 폴더 결정 — 결과는 항상 Result/ 또는 그 하위에만 둔다.
+        // currentDir 이 "Result" 또는 "Result/..." 면 그대로 (cut001 같은 하위 폴더 워크플로우).
+        // Assets 등 Result 밖이면 강제로 "Result" — 의도치 않은 위치 저장 차단.
+        const RESULT_DIR = "Result";
+        const dir = (viewerCurrentDir || "").replace(/\\/g, "/");
+        const targetSubdir = (dir === RESULT_DIR || dir.startsWith(RESULT_DIR + "/"))
+            ? dir
+            : RESULT_DIR;
         const body = {
             model: state.model,
             prompt,
