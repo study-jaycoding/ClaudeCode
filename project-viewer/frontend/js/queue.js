@@ -175,7 +175,8 @@ function _renderItem(job) {
             wrap.classList.add("missing");
             wrap.innerHTML = `<span class="q-thumb q-thumb-placeholder q-thumb-missing" title="원본 파일이 없습니다">⚠</span>`;
         };
-        if (qmedia.tagName === "IMG" && qmedia.complete && qmedia.naturalWidth === 0) onErr();
+        // src 비어있으면 lazy-media.js IO 가 setting 할 예정 — 즉시 판단 금지.
+        if (qmedia.tagName === "IMG" && qmedia.src && qmedia.complete && qmedia.naturalWidth === 0) onErr();
         else qmedia.addEventListener("error", onErr);
     }
     li.querySelector(".q-remove").addEventListener("click", async (e) => {

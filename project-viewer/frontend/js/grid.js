@@ -136,8 +136,9 @@ function _attachThumbErrorHandler(card) {
         thumb.insertBefore(ph, thumb.firstChild);
     };
     if (media.tagName === "IMG") {
-        // complete && naturalWidth===0 이면 이미 캐시 단계에서 실패한 상태
-        if (media.complete && media.naturalWidth === 0) onError();
+        // src 가 비어있으면 lazy-media.js 가 IO 진입 시 setting 할 예정 — 즉시
+        // 판단 금지 (src 없는 img 는 complete=true + naturalWidth=0 이라 false-positive).
+        if (media.src && media.complete && media.naturalWidth === 0) onError();
         else media.addEventListener("error", onError);
     } else {
         media.addEventListener("error", onError);
