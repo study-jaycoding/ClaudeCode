@@ -162,10 +162,6 @@ export async function revealFile(project, path) {
     }
 }
 
-export async function moveFilePrompt(project, path) {
-    await moveFilesPrompt(project, [path]);
-}
-
 export async function moveFilesPrompt(project, paths) {
     if (paths.length === 0) return;
     const firstFrom = paths[0].includes("/") ? paths[0].substring(0, paths[0].lastIndexOf("/")) : "";
@@ -467,10 +463,6 @@ export async function createFolderPrompt(project, parentDir) {
     } catch (err) {
         showError(`⚠ 폴더 생성 오류: ${err.message}`);
     }
-}
-
-export async function deleteFileConfirm(project, path) {
-    await deleteFilesConfirm(project, [path]);
 }
 
 export async function deleteFilesConfirm(project, paths) {

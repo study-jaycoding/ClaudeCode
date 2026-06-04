@@ -1,6 +1,6 @@
 // 초기화 + 전역 이벤트 (Esc, 외부 클릭, 타입 토글, IME 합성).
 
-import { spotlight, backdrop, promptInput, lightbox, modelDropdown, ratioDropdown } from "./dom.js";
+import { backdrop, promptInput, lightbox, modelDropdown, ratioDropdown } from "./dom.js";
 import { state, cache, pickerState } from "./state.js";
 import { closeAllDropdowns } from "./dropdowns.js";
 import { closeLightbox, isLightboxOpen } from "./lightbox.js";
@@ -24,11 +24,6 @@ export async function loadModels() {
     } catch (err) {
         console.error("Failed to load models:", err);
     }
-}
-
-export function openSpotlight() {
-    spotlight.classList.remove("hidden");
-    setTimeout(() => promptInput.focus(), 50);
 }
 
 function reactToTrigger() {

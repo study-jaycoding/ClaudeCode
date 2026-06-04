@@ -30,10 +30,12 @@ import {
     viewerPicker, viewerPickerTree, viewerPickerGrid, viewerPickerClose,
     viewerPickerBc, viewerPickerAdded,
     viewerPickerSort, viewerPickerSortDir, viewerPickerKind, viewerPickerColor,
+    previewContent,
 } from "./dom.js";
 import {
     currentProject, rootTree, activeTab,
     getViewerTrackForProject, setViewerTrackForProject,
+    setCurrentDir,
     colors,
 } from "./state.js";
 import { escapeHtml, kindFromPath, findNodeByPath, generateId, cssQueryEscape } from "./utils.js";
@@ -41,8 +43,7 @@ import { showInfo, showWarn } from "./info-toast.js";
 import { openLightbox } from "./lightbox.js";
 import { openCommentsModal, hasComments, unseenCommentCount, commentCount } from "./comments.js";
 import { showFolderGrid } from "./grid.js";
-import { setCurrentDir } from "./state.js";
-import { previewContent } from "./dom.js";
+import { pushUndo } from "./undo.js";
 
 // 보기 탭의 상단 그리드 내에서 파일 위치 열기 — 구성 탭으로 전환하지 않고 그 자리에서 이동.
 // 부모 폴더를 그리드에 그리고 그 파일 카드를 selected + scrollIntoView.
@@ -63,7 +64,6 @@ function _locateInViewerGrid(path) {
         card.scrollIntoView({ block: "center", behavior: "smooth" });
     }, 60);
 }
-import { pushUndo } from "./undo.js";
 
 const IMAGE_DEFAULT_SEC = 4;
 

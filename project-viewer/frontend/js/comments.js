@@ -129,11 +129,6 @@ export function markAllCommentsViewed(path) {
     _notifyChanged();
 }
 
-/** path 의 코멘트 중 안 본 게 하나라도 있는지. */
-export function hasUnseenComments(path) {
-    return unseenCommentCount(path) > 0;
-}
-
 /** path 의 코멘트 + 답글 중 안 본 항목 수. 폴더면 자손 모두 합산.
  *  viewedIds 는 파일별로 관리되므로 자손 파일마다 따로 조회. */
 export function unseenCommentCount(path) {

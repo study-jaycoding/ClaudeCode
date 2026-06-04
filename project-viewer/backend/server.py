@@ -453,6 +453,24 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _read_body(self) -> bytes:
+        """Content-Length 만큼 raw body 읽기. 0 이면 b''."""
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        return self.rfile.read(length) if length > 0 else b""
+
+    def _read_body_text(self) -> str:
+        """raw body 를 UTF-8 텍스트로. 빈 본문은 ''."""
+        return self._read_body().decode("utf-8")
+
+    def _read_json_body(self) -> dict | None:
+        """JSON body 파싱. 잘못된 JSON 이면 400 응답 후 None 반환 — 호출자는 즉시 return."""
+        raw = self._read_body_text() or "{}"
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            self._send_json(400, {"error": "잘못된 JSON"})
+            return None
+
     def _serve_sse(self) -> None:
         """SSE 스트림 — favorites.json 변경 등을 client 에 즉시 push.
         20초 timeout 으로 keep-alive ping; 연결 끊기면 종료."""
@@ -803,12 +821,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/sp/jobs/remove":
             if not self._check_same_origin():
                 self._send_json(403, {"error": "허용되지 않은 요청입니다."}); return
-            length = int(self.headers.get("Content-Length", "0"))
-            raw = self.rfile.read(length).decode("utf-8") if length else "{}"
-            try:
-                body = json.loads(raw)
-            except json.JSONDecodeError:
-                self._send_json(400, {"error": "잘못된 JSON"}); return
+            body = self._read_json_body()
+            if body is None: return
             job_id = (body.get("id") or "").strip()
             if not job_id:
                 self._send_json(400, {"error": "id 가 필요합니다."}); return
@@ -827,19 +841,14 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/sp/login":
                 self._send_json(*sp_api.post_login()); return
             if path == "/api/sp/generate":
-                length = int(self.headers.get("Content-Length", "0"))
-                raw = self.rfile.read(length).decode("utf-8") if length else ""
-                self._send_json(*sp_api.post_generate(raw)); return
+                self._send_json(*sp_api.post_generate(self._read_body_text())); return
             if path == "/api/sp/cost":
-                length = int(self.headers.get("Content-Length", "0"))
-                raw = self.rfile.read(length).decode("utf-8") if length else ""
-                self._send_json(*sp_api.post_cost(raw)); return
+                self._send_json(*sp_api.post_cost(self._read_body_text())); return
             if path == "/api/sp/recover":
-                length = int(self.headers.get("Content-Length", "0"))
-                raw = self.rfile.read(length).decode("utf-8") if length else ""
-                self._send_json(*sp_api.post_recover(raw)); return
+                self._send_json(*sp_api.post_recover(self._read_body_text())); return
             if path == "/api/sp/ref-upload":
-                length = int(self.headers.get("Content-Length", "0"))
+                # header length 로 사전 size 검증 — 거짓 큰 헤더로 read OOM 차단.
+                length = int(self.headers.get("Content-Length", "0") or "0")
                 filename = self.headers.get("X-File-Name", "upload.png")
                 body = self.rfile.read(length) if length > 0 else b""
                 self._send_json(*sp_api.post_ref_upload(length, filename, body)); return
@@ -848,13 +857,8 @@ class Handler(BaseHTTPRequestHandler):
             if not self._check_same_origin():
                 self._send_json(403, {"error": "허용되지 않은 요청입니다."})
                 return
-            length = int(self.headers.get("Content-Length", "0"))
-            raw = self.rfile.read(length).decode("utf-8") if length else "{}"
-            try:
-                payload = json.loads(raw)
-            except json.JSONDecodeError:
-                self._send_json(400, {"error": "잘못된 JSON"})
-                return
+            payload = self._read_json_body()
+            if payload is None: return
             project = payload.get("project", "")
             rel_dir = payload.get("dir", "")
             src_url = payload.get("url", "")
@@ -871,8 +875,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(404, {"error": "대상 폴더를 찾을 수 없습니다."})
                 return
             if not filename:
-                from urllib.parse import urlparse as _u, unquote as _uq
-                filename = _uq(_u(src_url).path.split("/")[-1]) or "downloaded"
+                filename = unquote(urlparse(src_url).path.split("/")[-1]) or "downloaded"
             if not is_safe_filename(filename):
                 self._send_json(400, {"error": "잘못된 파일 이름입니다."})
                 return
@@ -900,13 +903,8 @@ class Handler(BaseHTTPRequestHandler):
             if not self._check_same_origin():
                 self._send_json(403, {"error": "허용되지 않은 요청입니다."})
                 return
-            length = int(self.headers.get("Content-Length", "0"))
-            raw = self.rfile.read(length).decode("utf-8") if length else "{}"
-            try:
-                payload = json.loads(raw)
-            except json.JSONDecodeError:
-                self._send_json(400, {"error": "잘못된 JSON"})
-                return
+            payload = self._read_json_body()
+            if payload is None: return
             project = payload.get("project", "")
             rel = payload.get("path", "")
             project_dir = safe_project_dir(project)
@@ -939,13 +937,8 @@ class Handler(BaseHTTPRequestHandler):
             if not self._check_same_origin():
                 self._send_json(403, {"error": "허용되지 않은 요청입니다."})
                 return
-            length = int(self.headers.get("Content-Length", "0"))
-            raw = self.rfile.read(length).decode("utf-8") if length else "{}"
-            try:
-                payload = json.loads(raw)
-            except json.JSONDecodeError:
-                self._send_json(400, {"error": "잘못된 JSON"})
-                return
+            payload = self._read_json_body()
+            if payload is None: return
             project = payload.get("project", "")
             parent = payload.get("parent", "")
             name = (payload.get("name", "") or "").strip()
@@ -978,13 +971,8 @@ class Handler(BaseHTTPRequestHandler):
             if not self._check_same_origin():
                 self._send_json(403, {"error": "허용되지 않은 요청입니다."})
                 return
-            length = int(self.headers.get("Content-Length", "0"))
-            raw = self.rfile.read(length).decode("utf-8") if length else "{}"
-            try:
-                payload = json.loads(raw)
-            except json.JSONDecodeError:
-                self._send_json(400, {"error": "잘못된 JSON"})
-                return
+            payload = self._read_json_body()
+            if payload is None: return
             project = payload.get("project", "")
             rel = payload.get("path", "")
             new_name = payload.get("newName", "").strip()
@@ -1031,13 +1019,8 @@ class Handler(BaseHTTPRequestHandler):
                     "hint": "이 기능은 PV_BIND=127.0.0.1 (로컬 전용) 모드에서만 동작합니다.",
                 })
                 return
-            length = int(self.headers.get("Content-Length", "0"))
-            raw = self.rfile.read(length).decode("utf-8") if length else "{}"
-            try:
-                payload = json.loads(raw)
-            except json.JSONDecodeError:
-                self._send_json(400, {"error": "잘못된 JSON"})
-                return
+            payload = self._read_json_body()
+            if payload is None: return
             project = payload.get("project", "")
             rel = payload.get("path", "")
             project_dir = safe_project_dir(project)
@@ -1062,13 +1045,8 @@ class Handler(BaseHTTPRequestHandler):
             if not self._check_same_origin():
                 self._send_json(403, {"error": "허용되지 않은 요청입니다."})
                 return
-            length = int(self.headers.get("Content-Length", "0"))
-            raw = self.rfile.read(length).decode("utf-8") if length else "{}"
-            try:
-                payload = json.loads(raw)
-            except json.JSONDecodeError:
-                self._send_json(400, {"error": "잘못된 JSON"})
-                return
+            payload = self._read_json_body()
+            if payload is None: return
             project = payload.get("project", "")
             from_path = payload.get("from", "")
             to_dir = payload.get("toDir", "")
@@ -1106,8 +1084,7 @@ class Handler(BaseHTTPRequestHandler):
             if not self._check_same_origin():
                 self._send_json(403, {"error": "허용되지 않은 요청입니다."})
                 return
-            length = int(self.headers.get("Content-Length", "0"))
-            raw = self.rfile.read(length).decode("utf-8") if length else "[]"
+            raw = self._read_body_text() or "[]"
             try:
                 favs = json.loads(raw)
             except json.JSONDecodeError:
@@ -1140,13 +1117,8 @@ class Handler(BaseHTTPRequestHandler):
             if not self._check_same_origin():
                 self._send_json(403, {"error": "허용되지 않은 요청입니다."})
                 return
-            length = int(self.headers.get("Content-Length", "0"))
-            raw = self.rfile.read(length).decode("utf-8") if length else "{}"
-            try:
-                body = json.loads(raw)
-            except json.JSONDecodeError:
-                self._send_json(400, {"error": "잘못된 JSON"})
-                return
+            body = self._read_json_body()
+            if body is None: return
             project = (body.get("project") or "").strip()
             paths = body.get("paths") or []
             color = body.get("color") or None
@@ -1170,13 +1142,8 @@ class Handler(BaseHTTPRequestHandler):
             if not self._check_same_origin():
                 self._send_json(403, {"error": "허용되지 않은 요청입니다."})
                 return
-            length = int(self.headers.get("Content-Length", "0"))
-            raw = self.rfile.read(length).decode("utf-8") if length else "{}"
-            try:
-                body = json.loads(raw)
-            except json.JSONDecodeError:
-                self._send_json(400, {"error": "잘못된 JSON"})
-                return
+            body = self._read_json_body()
+            if body is None: return
             project = (body.get("project") or "").strip()
             target_path = (body.get("path") or "").strip()
             author = body.get("author") or ""
@@ -1197,13 +1164,8 @@ class Handler(BaseHTTPRequestHandler):
             if not self._check_same_origin():
                 self._send_json(403, {"error": "허용되지 않은 요청입니다."})
                 return
-            length = int(self.headers.get("Content-Length", "0"))
-            raw = self.rfile.read(length).decode("utf-8") if length else "{}"
-            try:
-                body = json.loads(raw)
-            except json.JSONDecodeError:
-                self._send_json(400, {"error": "잘못된 JSON"})
-                return
+            body = self._read_json_body()
+            if body is None: return
             project = (body.get("project") or "").strip()
             target_path = (body.get("path") or "").strip()
             parent_id = (body.get("parentId") or "").strip()
@@ -1225,13 +1187,8 @@ class Handler(BaseHTTPRequestHandler):
             if not self._check_same_origin():
                 self._send_json(403, {"error": "허용되지 않은 요청입니다."})
                 return
-            length = int(self.headers.get("Content-Length", "0"))
-            raw = self.rfile.read(length).decode("utf-8") if length else "{}"
-            try:
-                body = json.loads(raw)
-            except json.JSONDecodeError:
-                self._send_json(400, {"error": "잘못된 JSON"})
-                return
+            body = self._read_json_body()
+            if body is None: return
             project = (body.get("project") or "").strip()
             target_path = (body.get("path") or "").strip()
             comment_id = (body.get("id") or "").strip()
@@ -1248,13 +1205,8 @@ class Handler(BaseHTTPRequestHandler):
             if not self._check_same_origin():
                 self._send_json(403, {"error": "허용되지 않은 요청입니다."})
                 return
-            length = int(self.headers.get("Content-Length", "0"))
-            raw = self.rfile.read(length).decode("utf-8") if length else "{}"
-            try:
-                body = json.loads(raw)
-            except json.JSONDecodeError:
-                self._send_json(400, {"error": "잘못된 JSON"})
-                return
+            body = self._read_json_body()
+            if body is None: return
             project = (body.get("project") or "").strip()
             target_path = (body.get("path") or "").strip()
             comment_id = (body.get("id") or "").strip()

@@ -69,8 +69,6 @@ let _lastSelectedFavId = null;
 // shift+화살표 / shift-click range 시작점. 단일 선택 시 null 로 리셋.
 let _shiftAnchorFavId = null;
 
-export function getSelectedFavIds() { return Array.from(_favSelected); }
-
 /** 즐겨찾기 패널에서 방향(±1) 으로 한 칸 이동. shift=true 면 anchor~target range 다중 선택. */
 export function moveFavoritesFocus(direction, shift) {
     if (!favoritesList) return;

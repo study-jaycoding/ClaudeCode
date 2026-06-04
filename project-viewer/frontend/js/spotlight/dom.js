@@ -20,13 +20,6 @@ export const modelDropdown = $("model-dropdown");
 export const ratioDropdown = $("ratio-dropdown");
 
 export const genBtn = $("gen-btn");
-// 결과 영역은 폐기됨 — viewer 사이드바 "큐" 탭에서 진행/이력 확인.
-// 호환을 위한 null stub (다른 모듈이 import 해도 폭주하지 않게).
-export const results = null;
-export const resultsGrid = null;
-export const resultsToggle = null;
-export const resultsToggleIcon = null;
-export const resultsUnseen = null;
 
 export const statusIndicator = $("status-indicator");
 export const statusText = $("status-text");
