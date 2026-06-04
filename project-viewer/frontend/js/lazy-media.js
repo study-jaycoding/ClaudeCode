@@ -1,31 +1,38 @@
 // =====================================================================
-// 비디오 카드 lazy 로드 + IndexedDB poster 캐시.
+// 비디오 + 이미지 카드 lazy 로드 + IndexedDB 썸네일 캐시.
 //
-// <video> 는 HTML5 표준 loading="lazy" 가 없어 viewport 밖에서도 preload 가
-// 즉시 동작 — 폴더에 비디오 30개면 30개 metadata 요청이 동시 발사.
+// 진짜 비용은 transfer 가 아니라 *디코드*. localhost 라 바이트는 거의 무료지만
+// 28MB PNG 한 장의 디코드 = 100MB RGBA + 수십 ms CPU. 그리드에 10장이면 합산해
+// 큰 stall. 한 번만 캡쳐해서 작은 JPG 썸네일을 IndexedDB 에 저장 → 이후 진입
+// 부터는 작은 썸네일만 디코드.
 //
 // 두 단계 절감:
 //   1) IntersectionObserver (rootMargin=200px) — viewport 진입 시에만 처리
-//   2) IndexedDB poster 캐시 — 한 번 캡쳐한 첫 프레임 JPG 를 저장,
-//      이후엔 비디오 src 를 안 설정하고 poster 만 박음. metadata 요청 0,
-//      디코드 0, 브라우저는 단일 작은 이미지로 표시.
+//   2) IndexedDB 썸네일 캐시:
+//      - video: 첫 프레임 JPG 를 poster 로 박음. src 안 설정 → 디코드 0
+//      - image: 두 번째 진입부터 작은 JPG 로 swap → 디코드 ~100배 감소
 //
 // 사용법:
 //   <video data-lazy-src="..." preload="none" muted></video>
+//   <img   data-lazy-src="..." loading="lazy" alt="" />
 //   ↓ DOM 삽입 후
-//   lazyAttachVideo(el)   // 또는 lazyScan(parent) 로 일괄
+//   lazyScan(parent)   // 단일은 lazyAttach(el)
 // =====================================================================
 
 const ROOT_MARGIN = "200px";
 const THRESHOLD = 0.01;
 
 const DB_NAME = "pv-thumbs";
-const DB_VERSION = 1;
-const STORE_POSTERS = "video-posters";
+const DB_VERSION = 2;                    // v1 → v2: image-thumbs store 추가
+const STORE_POSTERS = "video-posters";   // video 첫 프레임
+const STORE_IMG_THUMBS = "image-thumbs"; // 원본 이미지 downscale
 
-// 캡쳐 thumbnail 의 긴 변 최대 px. grid 카드가 보통 200-300px 이라 400 이면 충분.
-const POSTER_MAX_DIM = 400;
-const POSTER_JPEG_Q = 0.75;
+// 캡쳐 thumbnail 의 긴 변 최대 px. 카드 100-320px + retina 2x 까지 커버 800.
+const THUMB_MAX_DIM = 800;
+const THUMB_JPEG_Q = 0.8;
+
+// downscale 의미 없는 작은 이미지는 skip (원본 그대로). 800px 미만이면 downscale = no-op.
+const MIN_DOWNSCALE_DIM = THUMB_MAX_DIM;
 
 // ── IndexedDB ────────────────────────────────────────────────────────
 let _dbPromise = null;
@@ -39,6 +46,9 @@ function _openDB() {
                 if (!db.objectStoreNames.contains(STORE_POSTERS)) {
                     db.createObjectStore(STORE_POSTERS);
                 }
+                if (!db.objectStoreNames.contains(STORE_IMG_THUMBS)) {
+                    db.createObjectStore(STORE_IMG_THUMBS);
+                }
             };
             req.onsuccess = () => resolve(req.result);
             req.onerror = () => reject(req.error);
@@ -46,29 +56,28 @@ function _openDB() {
             reject(e);
         }
     });
-    // 한 번 실패해도 다음에 다시 시도 못 하면 영구 실패 — 안전망으로 catch 후 null cache
     _dbPromise.catch(() => { _dbPromise = null; });
     return _dbPromise;
 }
 
-async function _getPoster(key) {
+async function _idbGet(store, key) {
     try {
         const db = await _openDB();
         return await new Promise((resolve) => {
-            const tx = db.transaction(STORE_POSTERS, "readonly");
-            const req = tx.objectStore(STORE_POSTERS).get(key);
+            const tx = db.transaction(store, "readonly");
+            const req = tx.objectStore(store).get(key);
             req.onsuccess = () => resolve(req.result || null);
             req.onerror = () => resolve(null);
         });
     } catch { return null; }
 }
 
-async function _putPoster(key, blob) {
+async function _idbPut(store, key, blob) {
     try {
         const db = await _openDB();
         await new Promise((resolve) => {
-            const tx = db.transaction(STORE_POSTERS, "readwrite");
-            tx.objectStore(STORE_POSTERS).put(blob, key);
+            const tx = db.transaction(store, "readwrite");
+            tx.objectStore(store).put(blob, key);
             tx.oncomplete = () => resolve();
             tx.onerror = () => resolve();
             tx.onabort = () => resolve();
@@ -76,29 +85,31 @@ async function _putPoster(key, blob) {
     } catch {}
 }
 
-// ── 첫 프레임 캡쳐 ───────────────────────────────────────────────────
-function _captureFirstFrame(videoEl) {
+// ── 캡쳐 helpers ────────────────────────────────────────────────────
+function _downscaleToBlob(srcEl, w, h) {
     return new Promise((resolve) => {
-        const tryCapture = () => {
-            try {
-                const w = videoEl.videoWidth;
-                const h = videoEl.videoHeight;
-                if (!w || !h) { resolve(null); return; }
-                const scale = Math.min(1, POSTER_MAX_DIM / Math.max(w, h));
-                const tw = Math.max(1, Math.round(w * scale));
-                const th = Math.max(1, Math.round(h * scale));
-                const canvas = document.createElement("canvas");
-                canvas.width = tw;
-                canvas.height = th;
-                const ctx = canvas.getContext("2d");
-                ctx.drawImage(videoEl, 0, 0, tw, th);
-                canvas.toBlob((blob) => resolve(blob), "image/jpeg", POSTER_JPEG_Q);
-            } catch { resolve(null); }
+        try {
+            if (!w || !h) { resolve(null); return; }
+            const scale = Math.min(1, THUMB_MAX_DIM / Math.max(w, h));
+            const tw = Math.max(1, Math.round(w * scale));
+            const th = Math.max(1, Math.round(h * scale));
+            const canvas = document.createElement("canvas");
+            canvas.width = tw;
+            canvas.height = th;
+            canvas.getContext("2d").drawImage(srcEl, 0, 0, tw, th);
+            canvas.toBlob((blob) => resolve(blob), "image/jpeg", THUMB_JPEG_Q);
+        } catch { resolve(null); }
+    });
+}
+
+function _captureFirstVideoFrame(videoEl) {
+    return new Promise((resolve) => {
+        const tryCapture = async () => {
+            const blob = await _downscaleToBlob(videoEl, videoEl.videoWidth, videoEl.videoHeight);
+            resolve(blob);
         };
-        // readyState >= 2 (HAVE_CURRENT_DATA) 면 프레임 픽셀 데이터 사용 가능
         if (videoEl.readyState >= 2) tryCapture();
         else videoEl.addEventListener("loadeddata", tryCapture, { once: true });
-        // 안전 timeout — 어떤 이유로 loadeddata 안 오면 null
         setTimeout(() => resolve(null), 10_000);
     });
 }
@@ -117,13 +128,18 @@ function _getIO() {
     return _io;
 }
 
-async function _handleEnter(v) {
+async function _handleEnter(el) {
+    if (el.tagName === "VIDEO") return _handleVideoEnter(el);
+    if (el.tagName === "IMG")   return _handleImageEnter(el);
+}
+
+async function _handleVideoEnter(v) {
     const src = v.dataset.lazySrc;
     if (!src) return;
     delete v.dataset.lazySrc;
 
     // 캐시 hit — poster 만 박고 video src 는 건드리지 않음 (디코드 0)
-    const cached = await _getPoster(src);
+    const cached = await _idbGet(STORE_POSTERS, src);
     if (cached && v.isConnected) {
         try {
             v.poster = URL.createObjectURL(cached);
@@ -132,15 +148,13 @@ async function _handleEnter(v) {
         } catch {}
     }
 
-    // 캐시 miss — 원본 1회 로드, 첫 프레임 캡쳐 후 저장
+    // miss — 원본 1회 로드, 첫 프레임 캡쳐 후 저장
     if (!v.isConnected) return;
     v.preload = "metadata";
     v.src = src;
-    const blob = await _captureFirstFrame(v);
+    const blob = await _captureFirstVideoFrame(v);
     if (blob) {
-        _putPoster(src, blob);
-        // 캡쳐 후엔 video src 를 떼고 poster 만 둠 — 디코드 메모리 회수.
-        // (재생이 필요한 경우는 stage/lightbox 가 별도로 src 를 set 함.)
+        _idbPut(STORE_POSTERS, src, blob);
         try {
             v.poster = URL.createObjectURL(blob);
             v.removeAttribute("src");
@@ -150,17 +164,52 @@ async function _handleEnter(v) {
     }
 }
 
-/** 단일 video element 를 lazy 등록. data-lazy-src 가 있을 때만 동작. */
-export function lazyAttachVideo(el) {
-    if (!el || el.tagName !== "VIDEO") return;
-    if (!el.dataset.lazySrc) return;
+async function _handleImageEnter(img) {
+    const src = img.dataset.lazySrc;
+    if (!src) return;
+    delete img.dataset.lazySrc;
+
+    // 캐시 hit — 작은 썸네일 표시. 원본 디코드 0.
+    const cached = await _idbGet(STORE_IMG_THUMBS, src);
+    if (cached && img.isConnected) {
+        try {
+            img.src = URL.createObjectURL(cached);
+            return;
+        } catch {}
+    }
+
+    // miss — 원본 한 번 로드해서 그대로 표시 (사용자에겐 지금과 같은 체감).
+    // 백그라운드에서 downscale → cache → 작은 blob 으로 swap (큰 디코드 메모리 회수).
+    if (!img.isConnected) return;
+    img.src = src;
+    img.addEventListener("load", async () => {
+        const nw = img.naturalWidth, nh = img.naturalHeight;
+        if (!nw || !nh) return;
+        // 이미 작은 이미지는 downscale 의미 없음 — 캐시하지 않음
+        if (Math.max(nw, nh) < MIN_DOWNSCALE_DIM) return;
+        const blob = await _downscaleToBlob(img, nw, nh);
+        if (!blob) return;
+        _idbPut(STORE_IMG_THUMBS, src, blob);
+        if (img.isConnected) {
+            try { img.src = URL.createObjectURL(blob); } catch {}
+        }
+    }, { once: true });
+}
+
+/** 단일 element (video 또는 img) 를 lazy 등록. data-lazy-src 가 있을 때만 동작. */
+export function lazyAttach(el) {
+    if (!el || !el.dataset || !el.dataset.lazySrc) return;
+    if (el.tagName !== "VIDEO" && el.tagName !== "IMG") return;
     _getIO().observe(el);
 }
 
-/** parent 아래의 모든 data-lazy-src 비디오를 일괄 등록. */
+/** parent 아래의 모든 data-lazy-src 비디오/이미지를 일괄 등록. */
 export function lazyScan(parent) {
     if (!parent) return;
-    const list = parent.querySelectorAll("video[data-lazy-src]");
+    const list = parent.querySelectorAll("video[data-lazy-src], img[data-lazy-src]");
     const io = _getIO();
-    list.forEach((v) => io.observe(v));
+    list.forEach((el) => io.observe(el));
 }
+
+/** 하위 호환 — 기존 video 전용 export 도 유지. */
+export const lazyAttachVideo = lazyAttach;

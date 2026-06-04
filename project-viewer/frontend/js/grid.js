@@ -483,7 +483,7 @@ function renderGridCard(project, child) {
 
     let thumbInner;
     if (child.kind === "image") {
-        thumbInner = `<img src="${url}" alt="" loading="lazy" />`;
+        thumbInner = `<img data-lazy-src="${url}" alt="" loading="lazy" />`;
     } else if (child.kind === "video") {
         // viewport 진입 시에만 metadata 로드 — lazy-media.js 의 IO 가 처리.
         thumbInner = `<video data-lazy-src="${url}" preload="none" muted></video>
@@ -632,7 +632,7 @@ function renderSourceCard(fav, kind) {
     const url = `/media?project=${encodeURIComponent(fav.project)}&path=${encodeURIComponent(fav.path)}`;
     let thumbInner;
     if (kind === "image") {
-        thumbInner = `<img src="${url}" alt="" loading="lazy" />`;
+        thumbInner = `<img data-lazy-src="${url}" alt="" loading="lazy" />`;
     } else if (kind === "video") {
         thumbInner = `<video data-lazy-src="${url}" preload="none" muted></video><div class="play-badge">▶</div>`;
     } else {

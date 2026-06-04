@@ -69,7 +69,7 @@ function _thumbHtml(job) {
         if (job.kind === "video") {
             return `<video class="q-thumb" data-lazy-src="${url}" preload="none" muted></video>`;
         }
-        return `<img class="q-thumb" src="${url}" alt="" loading="lazy" />`;
+        return `<img class="q-thumb" data-lazy-src="${url}" alt="" loading="lazy" />`;
     }
     // 2순위: 다운로드 실패했지만 HF CDN URL 이 살아있는 경우 — 그 URL 로 직접 표시.
     // 사용자가 결과를 본 채로 "↻ 결과 가져오기" 로 다운로드 재시도 가능.
@@ -79,7 +79,7 @@ function _thumbHtml(job) {
         if (job.kind === "video") {
             return `<video class="q-thumb q-thumb-remote" data-lazy-src="${u}" preload="none" muted title="HF CDN 직접 로드 (다운로드 미완료)"></video>`;
         }
-        return `<img class="q-thumb q-thumb-remote" src="${u}" alt="" loading="lazy" title="HF CDN 직접 로드 (다운로드 미완료)" />`;
+        return `<img class="q-thumb q-thumb-remote" data-lazy-src="${u}" alt="" loading="lazy" title="HF CDN 직접 로드 (다운로드 미완료)" />`;
     }
     // placeholder
     const icon = job.status === "failed" ? "⚠" : job.status === "running" ? "⟳" : (job.kind === "video" ? "▶" : "🖼");

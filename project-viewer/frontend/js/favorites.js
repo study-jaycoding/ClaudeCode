@@ -699,7 +699,7 @@ function renderFavItem(fav) {
 
     let thumbHtml;
     if (kind === "image") {
-        thumbHtml = `<img src="${url}" loading="lazy" alt="" />`;
+        thumbHtml = `<img data-lazy-src="${url}" loading="lazy" alt="" />`;
     } else if (kind === "video") {
         thumbHtml = `<video data-lazy-src="${url}" preload="none" muted></video>`;
     } else {

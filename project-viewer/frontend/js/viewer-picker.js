@@ -169,7 +169,7 @@ function _renderPickerCard(node) {
     const url = `/media?project=${encodeURIComponent(currentProject)}&path=${encodeURIComponent(node.path)}`;
     const thumb = node.kind === "video"
         ? `<video class="vp-thumb" data-lazy-src="${url}" preload="none" muted></video>`
-        : `<img class="vp-thumb" src="${url}" alt="" loading="lazy" />`;
+        : `<img class="vp-thumb" data-lazy-src="${url}" alt="" loading="lazy" />`;
     const badge = node.kind === "video" ? "▶" : "🖼";
     el.innerHTML = `
         ${thumb}
