@@ -22,6 +22,7 @@ import {
     escapeHtml, kindFromPath, generateId, findNodeByPath, isGeneratedPath,
 } from "./utils.js";
 import { apiGetFavorites, apiPersistFavorites } from "./api.js";
+import { lazyScan } from "./lazy-media.js";
 import { openLightbox } from "./lightbox.js";
 import { pushUndo } from "./undo.js";
 import { reapplyPanelSearch } from "./panel-search.js";
@@ -683,6 +684,7 @@ export function renderFavoritesItems() {
     }
     // 리스트 재구성 후 검색 필터 다시 적용
     reapplyPanelSearch();
+    lazyScan(favoritesList);
 }
 
 function renderFavItem(fav) {
@@ -699,7 +701,7 @@ function renderFavItem(fav) {
     if (kind === "image") {
         thumbHtml = `<img src="${url}" loading="lazy" alt="" />`;
     } else if (kind === "video") {
-        thumbHtml = `<video src="${url}" preload="metadata" muted></video>`;
+        thumbHtml = `<video data-lazy-src="${url}" preload="none" muted></video>`;
     } else {
         thumbHtml = `<span>📄</span>`;
     }

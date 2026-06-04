@@ -38,6 +38,7 @@ import { sortItems, groupLabelFor } from "./view-controls.js";
 import { currentSortKey } from "./state.js";
 import { makeCardDraggable } from "./upload.js";
 import { hasComments, unseenCommentCount, commentCount, openCommentsModal } from "./comments.js";
+import { lazyScan } from "./lazy-media.js";
 
 const RESULT_DIR = "Result";
 
@@ -324,6 +325,7 @@ export function showFolderGrid(project, node) {
     previewContent.appendChild(renderColorFilterBar());
     previewContent.appendChild(grid);
     updateCardNewBadges();
+    lazyScan(grid);
 }
 
 // 그리드 상단 필터 bar — 종류 dropdown 항상, R/G/B 컬러 칩은 옵션 (소스탭 제외).
@@ -483,7 +485,8 @@ function renderGridCard(project, child) {
     if (child.kind === "image") {
         thumbInner = `<img src="${url}" alt="" loading="lazy" />`;
     } else if (child.kind === "video") {
-        thumbInner = `<video src="${url}" preload="metadata" muted></video>
+        // viewport 진입 시에만 metadata 로드 — lazy-media.js 의 IO 가 처리.
+        thumbInner = `<video data-lazy-src="${url}" preload="none" muted></video>
                       <div class="play-badge">▶</div>`;
     } else if (child.kind === "text") {
         thumbInner = `<div class="thumb-icon">📄</div>`;
@@ -616,6 +619,7 @@ export function showSourceGrid(filterTag) {
     previewContent.appendChild(grid);
     renderTagFilterBar();  // 사이드바 + 우측 둘 다 렌더
     updateCardNewBadges();
+    lazyScan(grid);
 }
 
 function renderSourceCard(fav, kind) {
@@ -630,7 +634,7 @@ function renderSourceCard(fav, kind) {
     if (kind === "image") {
         thumbInner = `<img src="${url}" alt="" loading="lazy" />`;
     } else if (kind === "video") {
-        thumbInner = `<video src="${url}" preload="metadata" muted></video><div class="play-badge">▶</div>`;
+        thumbInner = `<video data-lazy-src="${url}" preload="none" muted></video><div class="play-badge">▶</div>`;
     } else {
         thumbInner = `<div class="thumb-icon">📄</div>`;
     }

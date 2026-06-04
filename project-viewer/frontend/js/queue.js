@@ -14,6 +14,7 @@ import { setRunningCount } from "./favorites.js";
 import { activeTab, setLastFocusArea } from "./state.js";
 import { selectCard } from "./selection.js";
 import { openLightbox } from "./lightbox.js";
+import { lazyScan } from "./lazy-media.js";
 
 let _lastJobs = [];
 // shift+화살표 / shift+클릭 의 range 시작점 (큐 id). 단일/ctrl 클릭으로 새로 잡으면 갱신.
@@ -66,7 +67,7 @@ function _thumbHtml(job) {
     if (path && job.project) {
         const url = `/media?project=${encodeURIComponent(job.project)}&path=${encodeURIComponent(path)}`;
         if (job.kind === "video") {
-            return `<video class="q-thumb" src="${url}" preload="metadata" muted></video>`;
+            return `<video class="q-thumb" data-lazy-src="${url}" preload="none" muted></video>`;
         }
         return `<img class="q-thumb" src="${url}" alt="" loading="lazy" />`;
     }
@@ -76,7 +77,7 @@ function _thumbHtml(job) {
     if (urls.length > 0) {
         const u = urls[0];
         if (job.kind === "video") {
-            return `<video class="q-thumb q-thumb-remote" src="${u}" preload="metadata" muted title="HF CDN 직접 로드 (다운로드 미완료)"></video>`;
+            return `<video class="q-thumb q-thumb-remote" data-lazy-src="${u}" preload="none" muted title="HF CDN 직접 로드 (다운로드 미완료)"></video>`;
         }
         return `<img class="q-thumb q-thumb-remote" src="${u}" alt="" loading="lazy" title="HF CDN 직접 로드 (다운로드 미완료)" />`;
     }
@@ -404,6 +405,7 @@ function _renderRunningStripInGenerated() {
     for (const job of running) {
         el.appendChild(_renderItem(job));
     }
+    lazyScan(el);
 }
 
 // 생성 탭의 메인 list — 완료/실패 batch 들 (running 은 위 strip 이 담당).
@@ -437,6 +439,7 @@ function _renderGeneratedJobsList() {
         }
         el.appendChild(_renderItem(job));
     }
+    lazyScan(el);
 }
 
 function _updateFilterTabCounts(finished) {

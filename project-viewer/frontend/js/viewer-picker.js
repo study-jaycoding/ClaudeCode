@@ -18,6 +18,7 @@ import {
 import { currentProject, rootTree, colors } from "./state.js";
 import { escapeHtml, kindFromPath, findNodeByPath } from "./utils.js";
 import { showWarn } from "./info-toast.js";
+import { lazyScan } from "./lazy-media.js";
 
 const PICKER_SORT_KEY = "viewer.pickerSort";
 const PICKER_SORT_DIR_KEY = "viewer.pickerSortDir";
@@ -156,6 +157,7 @@ function _renderPickerGrid() {
     }
     viewerPickerGrid.innerHTML = "";
     items.forEach((node) => viewerPickerGrid.appendChild(_renderPickerCard(node)));
+    lazyScan(viewerPickerGrid);
 }
 
 function _renderPickerCard(node) {
@@ -166,7 +168,7 @@ function _renderPickerCard(node) {
     el.dataset.path = node.path;
     const url = `/media?project=${encodeURIComponent(currentProject)}&path=${encodeURIComponent(node.path)}`;
     const thumb = node.kind === "video"
-        ? `<video class="vp-thumb" src="${url}" preload="metadata" muted></video>`
+        ? `<video class="vp-thumb" data-lazy-src="${url}" preload="none" muted></video>`
         : `<img class="vp-thumb" src="${url}" alt="" loading="lazy" />`;
     const badge = node.kind === "video" ? "▶" : "🖼";
     el.innerHTML = `
