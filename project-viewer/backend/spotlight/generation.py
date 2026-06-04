@@ -358,10 +358,11 @@ def generate(payload: dict) -> tuple[int, dict]:
     target_project = (payload.get("project") or "").strip()
     source_ids = payload.get("source_ids") or []
     auto_download = bool(payload.get("auto_download", True))
-    # 저장 폴더 — frontend 가 viewer 의 currentDir 을 보냄. 비어있으면 기본 "Result".
-    # ".." 같은 path traversal 은 download_to_project 안에서 검증됨.
-    target_subdir = (payload.get("subdir") or "Result").strip().replace("\\", "/")
-    if not target_subdir or target_subdir.startswith("/"):
+    # 저장 폴더 — 항상 "Result" 또는 그 하위만 허용.
+    # frontend 도 같은 clamp 를 하지만 belt-and-suspenders 로 backend 에서도 강제.
+    # Assets 등 다른 폴더로 결과가 새는 걸 차단. ".." path traversal 은 download_to_project 안에서 검증됨.
+    target_subdir = (payload.get("subdir") or "Result").strip().replace("\\", "/").strip("/")
+    if target_subdir != "Result" and not target_subdir.startswith("Result/"):
         target_subdir = "Result"
 
     repeat = max(1, min(4, int(payload.get("repeat", 1))))
