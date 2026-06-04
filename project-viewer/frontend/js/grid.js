@@ -37,10 +37,14 @@ import { openLightbox } from "./lightbox.js";
 import { sortItems, groupLabelFor } from "./view-controls.js";
 import { currentSortKey } from "./state.js";
 import { makeCardDraggable } from "./upload.js";
-import { getTrackPositionMap } from "./viewer-tab.js";
 import { hasComments, unseenCommentCount, commentCount, openCommentsModal } from "./comments.js";
 
 const RESULT_DIR = "Result";
+
+// 트랙 위치 맵 제공자 — viewer-tab.js 가 init 시점에 자기 getTrackPositionMap 을 주입.
+// grid.js 가 viewer-tab.js 를 import 하지 않게 해 순환 의존성을 끊는다.
+let _trackMapProvider = null;
+export function setTrackMapProvider(fn) { _trackMapProvider = fn; }
 
 /** dragstart 가 setData 한 트리 path 들 추출. 다중(text/x-tree-paths) 우선, 없으면 단일(text/x-tree-path). */
 export function _extractDraggedPaths(e) {
@@ -50,12 +54,11 @@ export function _extractDraggedPaths(e) {
     return single ? [single] : [];
 }
 
-// viewer 트랙 위치 라벨 — getTrackPositionMap() 을 매번 호출 (그 함수가 _track 을 읽음).
-// 카드 렌더 시점과 트랙 변경 시점 모두 정확한 최신 값 반영.
+// viewer 트랙 위치 라벨 — provider 가 등록돼 있을 때만 동작. 카드 렌더 시점과 트랙 변경 시점 모두 최신 값.
 function _applyTrackBadge(card, path) {
     if (!card) return;
     let badge = card.querySelector(".card-track-badge");
-    const map = getTrackPositionMap();
+    const map = _trackMapProvider ? _trackMapProvider() : {};
     const positions = path ? map[path] : null;
     if (positions && positions.length > 0) {
         if (!badge) {

@@ -39,7 +39,7 @@ import { escapeHtml, kindFromPath, findNodeByPath, generateId, cssQueryEscape } 
 import { showInfo, showWarn } from "./info-toast.js";
 import { openLightbox } from "./lightbox.js";
 import { openCommentsModal, hasComments, unseenCommentCount, commentCount } from "./comments.js";
-import { showFolderGrid } from "./grid.js";
+import { showFolderGrid, setTrackMapProvider } from "./grid.js";
 import { pushUndo } from "./undo.js";
 import { initPicker, isPickerOpen, closePicker } from "./viewer-picker.js";
 
@@ -149,7 +149,7 @@ function _saveTrack() {
  *  - 여러 레이어 슬롯: "1_1" (primary), "1_2", ... — primary 가 항상 _1.
  *  - 같은 path 가 여러 위치에 있으면 모두 표시.
  */
-export function getTrackPositionMap() {
+function getTrackPositionMap() {
     const map = {};
     _track.forEach((slot, slotIdx) => {
         const sNum = slotIdx + 1;
@@ -1337,6 +1337,9 @@ initPicker({
         layers: _track.reduce((s, sl) => s + (sl.layers?.length || 0), 0),
     }),
 });
+
+// grid.js 의 카드 트랙-위치 배지가 사용할 provider 등록 — 순환 import 방지.
+setTrackMapProvider(getTrackPositionMap);
 
 // === 이벤트 ===
 
