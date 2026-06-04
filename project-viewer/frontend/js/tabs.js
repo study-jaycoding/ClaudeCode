@@ -5,7 +5,7 @@
 // =====================================================================
 import {
     tabBtns, tabTree, tabFavorites, tabGenerated, tabViewer,
-    viewerStage,
+    viewerStage, previewContent,
 } from "./dom.js";
 import {
     currentProject, currentDir, rootTree,
@@ -14,7 +14,7 @@ import {
     setCurrentDir, getTreeLastDirForProject,
 } from "./state.js";
 import {
-    initFavorites, renderFavorites,
+    renderFavorites,
     updateFavCount, updateCardNewBadges,
 } from "./favorites.js";
 import { showFolderGrid, showSourceGrid, showGeneratedGrid } from "./grid.js";
@@ -25,6 +25,66 @@ import { findNodeByPath } from "./utils.js";
 const sidebar = document.querySelector("aside.sidebar");
 const previewSection = document.querySelector("section.preview");
 const spotlightEl = document.getElementById("spotlight");
+
+// =====================================================================
+// 탭별 DOM 보존 — previewContent 의 children 을 DocumentFragment 로 detach 해서
+// 캐시. 같은 탭+같은 key 재방문 시 통째로 다시 attach (재렌더 0).
+// invalidatePaneCache() 로 외부에서 무효화.
+// =====================================================================
+const _paneCache = new Map();   // key → DocumentFragment
+let _lastPaneKey = null;
+let _mo = null;
+
+function _currentPaneKey() {
+    if (activeTab === "tree")      return `tree|${currentProject}|${currentDir}`;
+    if (activeTab === "favorites") return `favorites|${currentProject}|${activeTagFilter}`;
+    if (activeTab === "generated") return `gen|${currentProject}`;
+    if (activeTab === "viewer")    return `gen|${currentProject}`;  // viewer 도 같은 그리드
+    return `${activeTab}|${currentProject}`;
+}
+
+function _detachCurrentPane() {
+    if (!_lastPaneKey || !previewContent || !previewContent.firstChild) return;
+    const frag = document.createDocumentFragment();
+    while (previewContent.firstChild) frag.appendChild(previewContent.firstChild);
+    _paneCache.set(_lastPaneKey, frag);
+    if (_mo) _mo.takeRecords();   // 자체 mutation 흡수 — MO 가 lastPaneKey 안 건드리게
+}
+
+function _restorePane(key) {
+    const frag = _paneCache.get(key);
+    if (!frag) return false;
+    while (previewContent.firstChild) previewContent.removeChild(previewContent.firstChild);
+    previewContent.appendChild(frag);
+    _paneCache.delete(key);       // 일회용 — 다음 detach 가 다시 저장
+    if (_mo) _mo.takeRecords();
+    return true;
+}
+
+/** 외부 무효화 — pv:project-changed, file CRUD, 데이터 변경 시 호출.
+ *  predicate(key) 가 truthy 인 cache 만 삭제. predicate 없으면 전부. */
+export function invalidatePaneCache(predicate) {
+    if (!predicate) { _paneCache.clear(); return; }
+    for (const key of Array.from(_paneCache.keys())) {
+        if (predicate(key)) _paneCache.delete(key);
+    }
+}
+
+// show* 가 previewContent 를 직접 갱신하면 (예: 폴더 진입) MO 가 감지해서
+// _lastPaneKey 를 최신 _currentPaneKey() 로 다시 묶고, 그 탭의 stale cache 삭제.
+function _initPaneCache() {
+    if (!previewContent) return;
+    _mo = new MutationObserver(() => {
+        _lastPaneKey = _currentPaneKey();
+        _paneCache.delete(_lastPaneKey);
+    });
+    _mo.observe(previewContent, { childList: true });
+    _lastPaneKey = _currentPaneKey();
+}
+_initPaneCache();
+
+// 프로젝트 바뀌면 모든 cache 무효 — 다른 프로젝트 데이터.
+window.addEventListener("pv:project-changed", () => invalidatePaneCache());
 
 /** DOM 가시성(탭 + sidebar collapsed) 을 현재 state 에 맞춰 동기화. */
 function applySidebarState() {
@@ -43,18 +103,41 @@ function applySidebarState() {
     if (spotlightEl) spotlightEl.classList.toggle("hidden-by-tab", isViewer);
 }
 
-/** 활성 탭의 그리드/리스트를 그린다. (탭이 진짜 바뀐 경우에만 호출) */
+/** 활성 탭의 그리드/리스트를 그린다. cache hit 면 DOM 통째로 복원, miss 면 render.
+ *  탭 전환 클릭 핸들러에서 호출. 같은 (탭+key) 재방문은 즉시. */
 function renderForActiveTab() {
+    const newKey = _currentPaneKey();
+    if (newKey === _lastPaneKey && previewContent && previewContent.firstChild) {
+        // 이미 그 탭의 그 key 가 화면에 있음 — 아무 것도 안 함
+        return;
+    }
+
+    // 이전 탭 콘텐츠 detach 해서 cache 에 보관
+    _detachCurrentPane();
+    _lastPaneKey = newKey;
+
+    // 새 탭에 cache 가 있으면 통째로 복원 — render 없음.
+    if (_restorePane(newKey)) {
+        // 사이드바 부수 처리만 (count / new badge — 가벼움)
+        updateFavCount();
+        updateCardNewBadges();
+        // viewer 탭은 stage 도 켜야 함 (showViewer 가 항상 호출되어야 재생 상태 복원)
+        if (activeTab === "viewer") showViewer();
+        // queue 사이드바도 항상 최신 (cheap)
+        if (activeTab === "generated") refreshQueue();
+        return;
+    }
+
+    // cache miss — 평소처럼 render
     if (activeTab === "favorites") {
         renderFavorites();
         showSourceGrid(activeTagFilter);
     } else if (activeTab === "generated") {
         showGeneratedGrid();
-        initFavorites();
         refreshQueue();
+        // initFavorites 는 프로젝트 변경/SSE 시 자동 갱신 → 탭 전환마다 재호출 불필요
     } else if (activeTab === "viewer") {
         // 위: 생성 결과물 그리드 (showGeneratedGrid) + 아래: viewer-stage 의 split 레이아웃.
-        // 그리드에서 카드를 드래그/클릭으로 트랙에 추가 가능.
         showGeneratedGrid();
         showViewer();
     } else {
