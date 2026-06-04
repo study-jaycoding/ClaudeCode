@@ -152,11 +152,8 @@ function createInlineChip(ref) {
 }
 
 export function insertChipAtCaret(ref, replaceAtQuery) {
-    if (isRefInDom(ref)) {
-        if (replaceAtQuery) stripAtQuery();
-        promptInput.focus();
-        return;
-    }
+    // 같은 ref 를 두 번 이상 삽입할 수 있게 dedup 차단 없음 — 동일 레퍼런스를
+    // 의도적으로 여러 번 강조하고 싶은 경우가 있다.
     promptInput.focus();
     let range;
     if (replaceAtQuery) {
@@ -204,13 +201,7 @@ export function insertMixedAtCaret(parts) {
     let lastChip = null;
     for (const p of parts) {
         if (p.type === "chip") {
-            if (isRefInDom(p.value)) continue;
-            // 중복 방지를 위해 이미 frag 안에도 같은 ref 가 있는지 체크
-            const key = favKey(p.value);
-            const dup = Array.from(frag.querySelectorAll(".inline-ref")).some((el) => {
-                try { return favKey(JSON.parse(el.dataset.ref)) === key; } catch { return false; }
-            });
-            if (dup) continue;
+            // 중복 차단 없음 — 같은 ref 가 여러 번 들어가도 허용 (insertChipAtCaret 와 동일 정책).
             const chip = createInlineChip(p.value);
             frag.appendChild(chip);
             frag.appendChild(document.createTextNode(" "));
