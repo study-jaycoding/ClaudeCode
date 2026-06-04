@@ -42,6 +42,7 @@ import { openCommentsModal, hasComments, unseenCommentCount, commentCount } from
 import { showFolderGrid, setTrackMapProvider } from "./grid.js";
 import { pushUndo } from "./undo.js";
 import { initPicker, isPickerOpen, closePicker } from "./viewer-picker.js";
+import "./viewer-split.js";  // side-effect: split-resize 이벤트 + MutationObserver 자동 등록
 
 // 보기 탭의 상단 그리드 내에서 파일 위치 열기 — 구성 탭으로 전환하지 않고 그 자리에서 이동.
 // 부모 폴더를 그리드에 그리고 그 파일 카드를 selected + scrollIntoView.
@@ -1355,66 +1356,6 @@ viewerFsBtn?.addEventListener("click", _toggleFullscreen);
 // 초기 상태 적용
 _applyVolume();
 _updateLoopButton();
-
-// === Split resize — 상단 그리드 ↔ 하단 stage 비율 조절 ===
-const SPLIT_KEY = "viewer.splitRatio";
-const _splitter = document.getElementById("viewer-splitter");
-const _previewEl = document.querySelector("section.preview");
-const _previewContentEl = document.getElementById("preview-content");
-let _splitRatio = (() => {
-    try {
-        const v = parseFloat(localStorage.getItem(SPLIT_KEY));
-        return isFinite(v) && v >= 0.15 && v <= 0.85 ? v : 0.5;
-    } catch { return 0.5; }
-})();
-
-function applyViewerSplit() {
-    if (!_previewEl || !_previewContentEl || !viewerStage) return;
-    if (!_previewEl.classList.contains("viewer-mode")) {
-        _previewContentEl.style.flex = "";
-        viewerStage.style.flex = "";
-        return;
-    }
-    const pct = (_splitRatio * 100).toFixed(2);
-    const restPct = ((1 - _splitRatio) * 100).toFixed(2);
-    _previewContentEl.style.flex = `1 1 ${pct}%`;
-    viewerStage.style.flex = `1 1 ${restPct}%`;
-}
-
-let _splitDrag = null;
-_splitter?.addEventListener("mousedown", (e) => {
-    if (e.button !== 0) return;
-    if (!_previewEl?.classList.contains("viewer-mode")) return;
-    const rect = _previewEl.getBoundingClientRect();
-    _splitDrag = { rect };
-    _splitter.classList.add("dragging");
-    e.preventDefault();
-    e.stopPropagation();
-});
-document.addEventListener("mousemove", (e) => {
-    if (!_splitDrag) return;
-    const r = _splitDrag.rect;
-    // preview-content 영역 안에서 마우스 Y 비율 — view-controls/info 의 공간 약 80px 빼기
-    const headerH = 80;
-    const y = e.clientY - r.top - headerH;
-    const usable = Math.max(200, r.height - headerH);
-    let ratio = y / usable;
-    ratio = Math.max(0.15, Math.min(0.85, ratio));
-    _splitRatio = ratio;
-    applyViewerSplit();
-});
-document.addEventListener("mouseup", () => {
-    if (!_splitDrag) return;
-    _splitDrag = null;
-    _splitter?.classList.remove("dragging");
-    try { localStorage.setItem(SPLIT_KEY, String(_splitRatio)); } catch {}
-});
-
-// viewer-mode 진입/탈출 시 split 적용. tabs.js 가 클래스 토글하므로 MutationObserver 로 감지.
-if (_previewEl) {
-    new MutationObserver(() => applyViewerSplit()).observe(_previewEl, { attributes: true, attributeFilter: ["class"] });
-    applyViewerSplit();
-}
 
 // 트랙 리스트 빈 영역 drop = 끝에 새 슬롯 추가
 viewerTrackList?.addEventListener("dragover", (e) => {
