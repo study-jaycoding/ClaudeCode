@@ -87,14 +87,30 @@ function isExternalDrop(e) {
     return false;
 }
 
+// spotlight 영역 위에서는 viewer overlay 가 뜨면 안 됨 — spotlight 가 자체로 drop 처리.
+function _isInSpotlight(e) {
+    const t = e.target;
+    return !!(t && t.closest && t.closest("#spotlight"));
+}
+
 document.addEventListener("dragenter", (e) => {
     if (!isExternalDrop(e)) return;
+    if (_isInSpotlight(e)) {
+        // overlay 가 이미 떠있으면 즉시 hide (사용자가 viewer 영역에서 spotlight 로 이동)
+        if (!dropOverlay.classList.contains("hidden")) {
+            setDragDepth(0);
+            dropOverlay.classList.add("hidden");
+        }
+        return;
+    }
     e.preventDefault();
     setDragDepth(dragDepth + 1);
     setDropTargetLabel();
     dropOverlay.classList.remove("hidden");
 });
 document.addEventListener("dragover", (e) => {
+    // spotlight 안에서는 자체 dragover 가 처리하므로 viewer 는 빠짐.
+    if (_isInSpotlight(e)) return;
     // preventDefault 는 내부 드래그에도 필요 (브라우저가 URL 로 navigate 하는 것 차단).
     e.preventDefault();
     e.stopPropagation();
@@ -104,11 +120,15 @@ document.addEventListener("dragover", (e) => {
 });
 document.addEventListener("dragleave", (e) => {
     if (!isExternalDrop(e)) return;
+    if (_isInSpotlight(e)) return;
     e.preventDefault();
     setDragDepth(dragDepth - 1);
     if (dragDepth <= 0) { setDragDepth(0); dropOverlay.classList.add("hidden"); }
 });
 document.addEventListener("drop", async (e) => {
+    // spotlight 안 drop 은 그쪽 핸들러가 stopPropagation 으로 막아 보통 안 옴.
+    // 안전망 — capture 누락 시에도 viewer 가 가로채지 않게.
+    if (_isInSpotlight(e)) { setDragDepth(0); dropOverlay.classList.add("hidden"); return; }
     e.preventDefault();
     e.stopPropagation();
 
