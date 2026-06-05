@@ -10,10 +10,11 @@ import { state, cache, pickerState, sourceFavorites } from "./state.js";
 import { currentProject as viewerCurrentProject } from "../state.js";
 import { escapeHtml } from "./utils.js";
 import { kindFromPath } from "../utils.js";
-import { mediaUrl, favName } from "./refModel.js";
+import { thumbUrl, favName } from "./refModel.js";
 import { isRefInDom, insertChipAtCaret, getAtQueryInfo } from "./prompt.js";
 import { fetchFavorites } from "./api.js";
 import { registerCloser } from "./dropdowns.js";
+import { lazyScan } from "../lazy-media.js";
 
 export function openFavPicker() {
     modelDropdown.classList.add("hidden");
@@ -109,11 +110,13 @@ export function renderFavList() {
         item.dataset.idx = i;
         // 파일 종류에 맞는 썸네일 (이미지 = img, 비디오 = video, 그 외 = 아이콘)
         const kind = kindFromPath(fav.path || "");
+        const tUrl = thumbUrl(fav);   // 서버 사전생성 800px JPG — 원본 디코드 회피
         let thumbHtml;
         if (kind === "video") {
-            thumbHtml = `<video class="fav-item-thumb" src="${mediaUrl(fav)}" preload="metadata" muted></video>`;
+            // 카드 비디오는 재생 안 함 → poster 만 표시 (디코드 0)
+            thumbHtml = `<video class="fav-item-thumb" data-lazy-poster="${tUrl}" preload="none" muted></video>`;
         } else if (kind === "image") {
-            thumbHtml = `<img class="fav-item-thumb" src="${mediaUrl(fav)}" alt="" loading="lazy" />`;
+            thumbHtml = `<img class="fav-item-thumb" data-lazy-src="${tUrl}" alt="" loading="lazy" />`;
         } else {
             thumbHtml = `<span class="fav-item-thumb fav-item-thumb-icon">📄</span>`;
         }
@@ -127,6 +130,7 @@ export function renderFavList() {
         });
         favList.appendChild(item);
     });
+    lazyScan(favList);
 }
 
 export function selectFavItem(fav) {
