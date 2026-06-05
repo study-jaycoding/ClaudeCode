@@ -98,6 +98,19 @@ function bindPromptInput() {
     });
 
     promptInput.addEventListener("keydown", (e) => {
+        // Shift+Backspace 는 IME 가드보다 먼저 — 한글 조합 중에도 무조건 전체 지움.
+        // (조합 중 isComposing/keyCode 229 가드에 막혀 첫 입력 직후 안 되는 문제 회피.)
+        if (e.key === "Backspace" && e.shiftKey) {
+            e.preventDefault();
+            e.stopPropagation();
+            // composition 강제 종료 후 clear — IME 잔존 상태 방지
+            promptInput.blur();
+            clearPrompt();
+            isComposing = false;
+            requestAnimationFrame(() => promptInput.focus());
+            return;
+        }
+
         if (isComposing || e.isComposing || e.keyCode === 229) return;
 
         // promptInput 안의 모든 keydown 은 글로벌로 안 새게 한다.
@@ -164,13 +177,7 @@ function bindPromptInput() {
             return;
         }
 
-        // Shift+Backspace → 프롬프트 전체 지우기 (chip + 텍스트 모두)
-        if (e.key === "Backspace" && e.shiftKey) {
-            e.preventDefault();
-            clearPrompt();
-            promptInput.focus();
-            return;
-        }
+        // (Shift+Backspace 는 위에서 IME 가드보다 먼저 처리됨)
 
         // 평상시 Enter → 생성
         if (e.key === "Enter" && !e.shiftKey) {
