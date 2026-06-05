@@ -446,14 +446,10 @@ document.addEventListener("keydown", (e) => {
     const ae = document.activeElement;
     if (ae && (["INPUT", "TEXTAREA"].includes(ae.tagName) || ae.isContentEditable)) return;
 
-    // Spotlight 가 열려있으면 글로벌 단축키 무시.
-    // (spotlight 의 promptInput keydown 핸들러가 ref 삽입 중 blur 를 호출하면
-    //  activeElement 가 body 로 바뀌어 위 contenteditable 가드가 fail 함 →
-    //  Enter 가 grid selected 카드의 openPath 로 새는 문제 방지.)
-    const spEl = document.getElementById("spotlight");
-    if (spEl && spEl.offsetParent !== null
-        && !spEl.classList.contains("hidden")
-        && !spEl.classList.contains("hidden-by-tab")) return;
+    // (예전엔 spotlight 가시성 가드로 모든 글로벌 키 차단했었으나 — spotlight
+    //  promptInput keydown 핸들러가 e.stopPropagation 으로 자체 차단(4c7e10b)
+    //  하므로 보조 가드 불필요. docked spotlight 에서 Del / F2 등이 막히던
+    //  부작용이 더 큼.)
 
     // 보기 탭은 자체 키보드 (viewer-tab.js) 가 Space/←/→/Delete 처리.
     // 여기서는 안 가로채야 한다 (탭 영역 외 단축키 Ctrl+? 만 통과).
