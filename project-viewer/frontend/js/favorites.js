@@ -675,6 +675,9 @@ export function removeTagFromAll(tag) {
 export function renderFavorites() {
     renderTagFilterBar();
     renderFavoritesItems();
+    // 활성 탭이 favorites 면 우측 소스 그리드도 함께 갱신 — 사이드바만 새로 그리고
+    // 우측이 stale 한 카운트를 보이던 회귀 방지 (새 소스 추가/삭제 흐름).
+    if (activeTab === "favorites") _refreshSourceGrid(activeTagFilter);
 }
 
 export function renderFavoritesItems() {
