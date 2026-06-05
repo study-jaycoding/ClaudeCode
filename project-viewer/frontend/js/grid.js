@@ -251,6 +251,17 @@ previewInfo.addEventListener("drop", async (e) => {
     }
 });
 
+// 폴더 node 의 모든 자손 *파일* 을 평면 리스트로 (폴더 자체는 제외).
+// 컬러 필터 활성 시 자손까지 한눈에 보기 위한 helper.
+function _flattenAllFiles(node, out = []) {
+    if (!node || !node.children) return out;
+    for (const c of node.children) {
+        if (c.type === "dir") _flattenAllFiles(c, out);
+        else out.push(c);
+    }
+    return out;
+}
+
 export function showFolderGrid(project, node) {
     previewInfo.innerHTML = _renderBreadcrumb(project, node, node.children.length);
 
@@ -266,19 +277,27 @@ export function showFolderGrid(project, node) {
     const grid = document.createElement("div");
     grid.className = "grid" + (currentView === "list" ? " list-view" : "");
 
-    // 컬러 필터 + 종류 필터 — 직교 적용. 폴더는 항상 통과 (네비 유지).
-    // 색 마커가 안 붙은 카드는 색 필터 활성 시 hide (노이즈 제거).
-    // per-tab 필터 — 현재 활성 탭의 값.
+    // 컬러 필터 + 종류 필터 — per-tab 필터, 현재 활성 탭의 값.
+    // 컬러 필터 활성 시: 폴더 자손 *모두 평면화* — 폴더 안에 숨어있는 마킹 파일도 표시.
+    //                  (요청 — 컬러로 작업 추적 시 위치 상관없이 한눈에).
+    // 컬러 필터 없을 시: 기존대로 직접 children 만 (폴더 + 파일).
     const filterColor = getColorFilter();
     const filterKind = getKindFilter();
-    const visibleChildren = (filterColor || filterKind)
-        ? node.children.filter((c) => {
-            if (c.type === "dir") return true;
-            if (filterColor && colors[c.path] !== filterColor) return false;
+    let visibleChildren;
+    if (filterColor) {
+        visibleChildren = _flattenAllFiles(node).filter((c) => {
+            if (colors[c.path] !== filterColor) return false;
             if (filterKind && c.kind !== filterKind) return false;
             return true;
-        })
-        : node.children;
+        });
+    } else if (filterKind) {
+        visibleChildren = node.children.filter((c) => {
+            if (c.type === "dir") return true;
+            return c.kind === filterKind;
+        });
+    } else {
+        visibleChildren = node.children;
+    }
 
     _renderWithGroupHeaders(grid, sortItems(visibleChildren), (child) => {
         const card = renderGridCard(project, child);
