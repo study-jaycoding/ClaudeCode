@@ -26,14 +26,31 @@ export async function loadModels() {
     }
 }
 
-// cache 가 있으면 즉시 open, 백그라운드에서 silent refresh + 재렌더.
+// cache 가 있으면 즉시 open, 백그라운드에서 silent refresh.
 // 매번 fetch → 결과 대기 → open 패턴은 작은 RT 라도 사용자가 "딜레이" 로 느낌.
 // 첫 페이지 로드 시점에 app.js 가 미리 loadFavorites 호출 → cache 준비됨.
+//
+// silent refresh 후 cache 가 실제로 변경됐을 때만 재렌더 (같으면 깜빡임 0).
+// id + project + path + tags 시그니처로 비교.
+function _favSignature() {
+    const list = cache.favorites || [];
+    let s = String(list.length) + "|";
+    for (const f of list) {
+        s += (f.id || "") + ":" + (f.project || "") + "/" + (f.path || "")
+           + "#" + ((f.tags || []).join(",")) + ";";
+    }
+    return s;
+}
+
 function _openImmediate(openFn, renderFn) {
     if (cache.favorites && cache.favorites.length > 0) {
         openFn();
-        // silent refresh — 다른 곳에서 favorites 변경된 경우 백그라운드로 따라잡음.
-        loadFavorites().then(() => { try { renderFn(); } catch {} });
+        const before = _favSignature();
+        loadFavorites().then(() => {
+            if (_favSignature() !== before) {
+                try { renderFn(); } catch {}
+            }
+        });
     } else {
         loadFavorites().then(openFn);
     }
