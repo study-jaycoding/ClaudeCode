@@ -417,6 +417,10 @@ def _fill_tree(directory: Path, parent_node: dict, prefix: str) -> None:
         # _generations.json.migrated 등 모두 포함)
         if _is_ledger(entry):
             continue
+        # project-manager 가 새 프로젝트 생성 시 자동으로 만드는 placeholder.
+        # 미디어 뷰어 트리에서는 숨김 (디스크에는 그대로 둠).
+        if entry.is_file() and entry.name.lower() == "readme.md":
+            continue
         rel = f"{prefix}{entry.name}"
         if entry.is_dir():
             child = {"name": entry.name, "type": "dir", "path": rel, "children": []}
