@@ -4,6 +4,7 @@ import json
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from urllib.parse import urlparse
 
 from .cli import run_cli
 from .projects_ops import (
@@ -62,15 +63,50 @@ def build_args(payload: dict) -> tuple[list[str], list[str]]:
             cost += [f"--{flag}", val]
 
     for ref in payload.get("ref_urls", []) or []:
-        # viewer 의 /media URL 또는 spotlight 의 /pv-media URL
-        if ref.startswith("/media") or ref.startswith("/pv-media"):
+        # viewer 의 /media URL 또는 spotlight 의 /pv-media URL.
+        # path-relative ("/media?...") 또는 fully qualified ("http://localhost:8766/media?...") 둘 다 인식.
+        # CLI 는 UUID / 로컬 절대경로만 받음 → 반드시 로컬 경로로 변환해야 함.
+        if _is_local_media_ref(ref):
             local = resolve_media_path(ref)
             if local:
                 create += ["--image", str(local)]
-        else:
-            create += ["--image", ref]
+                continue
+            # resolve 실패 → silent skip 하지 않고 명시적 에러로 노출.
+            # silent skip 시 CLI 가 "0개 ref 로" 실행해서 의도와 다른 결과가 나오거나
+            # 다른 ref 까지 한꺼번에 거부되는 사고.
+            raise ValueError(
+                f"ref 해석 실패 — 파일을 찾을 수 없거나 path 가 잘못됨: {ref!r}"
+            )
+        # 외부 URL (http/https) 이면 CLI 가 받을 수 있도록 그대로 전달.
+        # 단 동일 origin 의 잘린 URL 같은 경우 미리 거부하지 않으면 CLI 가 "neither UUID
+        # nor existing file path" 로 거부 → 사전 검증.
+        parsed = urlparse(ref)
+        if parsed.scheme in ("http", "https") and not parsed.path:
+            raise ValueError(f"ref URL 형식 오류 (path 없음): {ref!r}")
+        create += ["--image", ref]
 
     return create, cost
+
+
+# localhost / 127.0.0.1 의 /media · /pv-media 는 로컬 파일로 변환해야 한다.
+# /mediaX 같은 형제 경로는 제외하기 위해 정확히 두 endpoint 만 매칭.
+_LOCAL_MEDIA_PATHS = ("/media", "/pv-media")
+
+def _is_local_media_ref(ref: str) -> bool:
+    try:
+        u = urlparse(ref)
+    except ValueError:
+        return False
+    if u.path not in _LOCAL_MEDIA_PATHS:
+        return False
+    # path-relative ("/media?...") — scheme/netloc 빈
+    if not u.scheme and not u.netloc:
+        return True
+    # fully qualified — http/https + localhost 류 호스트만
+    if u.scheme not in ("http", "https"):
+        return False
+    host = (u.hostname or "").lower()
+    return host in ("localhost", "127.0.0.1", "0.0.0.0", "::1")
 
 
 def _collect_one(data) -> tuple[list[str], list[dict], str | None]:
@@ -415,7 +451,17 @@ def generate(payload: dict) -> tuple[int, dict]:
         pre_ids.append(jid)
 
     try:
-        create_args, cost_args = build_args(payload)
+        try:
+            create_args, cost_args = build_args(payload)
+        except ValueError as ve:
+            # ref 검증 실패 — 모든 pre-create entry 를 즉시 failed 로 마감.
+            msg = f"ref 검증 실패: {ve}"
+            for jid in pre_ids:
+                try:
+                    jobs_log.finalize(jid, project=target_project, status="failed", error=msg)
+                except Exception:
+                    pass
+            return 400, {"error": msg, "jobs": [], "images": [], "saved": []}
 
         # 모든 future 완료 대기 — idx 별 결과 보존.
         # queue_ids 전달 → create 직후 job_ids 가 jobs_log entry 에 즉시 저장됨.
