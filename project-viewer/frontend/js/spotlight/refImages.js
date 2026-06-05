@@ -335,7 +335,20 @@ export function bindRefImages() {
         if (imageItem) {
             e.preventDefault();
             const file = imageItem.getAsFile();
-            if (file) await uploadAndAddRef(file);
+            if (file) {
+                // 바이너리를 paste 시점에 *즉시* 메모리로 복사 — 클립보드가
+                // 그 후에 다른 캡쳐로 갱신되어도 이 paste 가 받은 데이터로 고정.
+                // (이전엔 file.stream() read 가 apiUpload fetch 시점에 일어나
+                //  Windows 캡쳐도구의 클립보드 race 로 옛 이미지가 들어가는 사례.)
+                try {
+                    const buf = await file.arrayBuffer();
+                    const fresh = new File([buf], file.name || "image.png",
+                                            { type: file.type || "image/png" });
+                    await uploadAndAddRef(fresh);
+                } catch {
+                    await uploadAndAddRef(file);  // fallback
+                }
+            }
             return;
         }
 
