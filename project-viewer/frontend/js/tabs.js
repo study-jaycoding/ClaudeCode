@@ -86,6 +86,10 @@ _initPaneCache();
 // 프로젝트 바뀌면 모든 cache 무효 — 다른 프로젝트 데이터.
 window.addEventListener("pv:project-changed", () => invalidatePaneCache());
 
+// 코멘트 변경 (추가/삭제/파일 삭제 동기화 등) 시 모든 pane cache 무효 —
+// 카드의 코멘트 배지가 stale 캐시 DOM 에 박혀있으면 갱신 안 됨.
+window.addEventListener("pv:comments-changed", () => invalidatePaneCache());
+
 /** DOM 가시성(탭 + sidebar collapsed) 을 현재 state 에 맞춰 동기화. */
 function applySidebarState() {
     tabBtns.forEach((b) => b.classList.toggle("active", b.dataset.tab === activeTab));

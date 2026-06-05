@@ -37,7 +37,7 @@ import { openLightbox } from "./lightbox.js";
 import { sortItems, groupLabelFor } from "./view-controls.js";
 import { currentSortKey } from "./state.js";
 import { makeCardDraggable } from "./upload.js";
-import { hasComments, unseenCommentCount, commentCount, openCommentsModal } from "./comments.js";
+import { hasComments, unseenCommentCount, commentCount, openCommentsModal, loadComments } from "./comments.js";
 import { lazyScan } from "./lazy-media.js";
 
 const RESULT_DIR = "Result";
@@ -886,7 +886,10 @@ export async function preview(project, node) {
 
 export async function reloadTreeAndShow(project, showDir) {
     try {
-        const { ok, data } = await apiGetTree(project);
+        // 트리 + 코멘트 cache 를 병렬 새로 — 파일 삭제 시 backend 가 코멘트 store
+        // 도 정리하지만 frontend 의 _comments cache 가 stale 면 배지가 남는다.
+        const [treeRes] = await Promise.all([apiGetTree(project), loadComments()]);
+        const { ok, data } = treeRes;
         if (!ok) return;
         setRootTree(data.tree);
         renderTree(rootTree, project);
