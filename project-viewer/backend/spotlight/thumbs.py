@@ -132,7 +132,16 @@ def ensure_thumb(
     size = max(MIN_SIZE, min(MAX_SIZE, int(size)))
     cache = _cache_path(project, rel, size)
     if cache.is_file():
-        return cache
+        # cache 가 원본보다 오래됐으면 stale — 같은 path 의 다른 파일이 새로 들어온
+        # 케이스 (apiUpload 의 unique_path 가 옛 삭제 후 같은 이름 재사용 등).
+        try:
+            if src.stat().st_mtime <= cache.stat().st_mtime:
+                return cache
+            # stale — 아래 재생성으로 fallthrough.
+            try: cache.unlink()
+            except OSError: pass
+        except OSError:
+            return cache
 
     # in-flight dedup — 같은 key 가 동시에 두 번 요청되면 한 번만 생성
     key = f"{project}|{rel}|{size}"
