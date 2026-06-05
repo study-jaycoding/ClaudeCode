@@ -7,7 +7,7 @@ import { closeLightbox, isLightboxOpen } from "./lightbox.js";
 import { fetchModels } from "./api.js";
 import { loadFavorites, openFavPicker, closeFavPicker, isFavPickerOpen, renderFavList, selectFavItem, updateFavHighlight } from "./favPicker.js";
 import { openTagPicker, closeTagPicker, isTagPickerOpen, renderTagList, selectTag, updateTagHighlight, clearTagFilter } from "./tagPicker.js";
-import { getAtQueryInfo, getSlashQueryInfo, stripAtQuery, stripSlashQuery } from "./prompt.js";
+import { getAtQueryInfo, getSlashQueryInfo, stripAtQuery, stripSlashQuery, clearPrompt } from "./prompt.js";
 import { onModelChange, filterModelsByType } from "./modelControls.js";
 import { handleKbdNav } from "./kbdNav.js";
 import { updateStatus } from "./status.js";
@@ -118,6 +118,14 @@ function bindPromptInput() {
             } else if (e.key === "Escape") {
                 e.stopPropagation(); closeFavPicker(); stripAtQuery();
             }
+            return;
+        }
+
+        // Shift+Backspace → 프롬프트 전체 지우기 (chip + 텍스트 모두)
+        if (e.key === "Backspace" && e.shiftKey) {
+            e.preventDefault();
+            clearPrompt();
+            promptInput.focus();
             return;
         }
 
