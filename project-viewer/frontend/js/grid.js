@@ -35,7 +35,7 @@ import { attachLongPress, closeContextPopup } from "./popup.js";
 import { openTreeMenu, moveFile } from "./menus.js";
 import { openLightbox } from "./lightbox.js";
 import { sortItems, groupLabelFor } from "./view-controls.js";
-import { currentSortKey } from "./state.js";
+import { currentSortKey, activeTab, activeTagFilter } from "./state.js";
 import { makeCardDraggable } from "./upload.js";
 import { hasComments, unseenCommentCount, commentCount, openCommentsModal, loadComments } from "./comments.js";
 import { lazyScan } from "./lazy-media.js";
@@ -922,6 +922,14 @@ export async function reloadTreeAndShow(project, showDir) {
         }
         const node = findNodeByPath(rootTree, showDir) || rootTree;
         setCurrentDir(node.path);
-        showFolderGrid(project, node);
+        // 활성 탭에 맞는 우측 그리드 갱신 — favorites 탭에서 파일 삭제 후 우측이
+        // 폴더 그리드로 튀던 회귀 방지.
+        if (activeTab === "favorites") {
+            showSourceGrid(activeTagFilter);
+        } else if (activeTab === "generated" || activeTab === "viewer") {
+            showGeneratedGrid();
+        } else {
+            showFolderGrid(project, node);
+        }
     } catch (err) { console.error(err); }
 }
