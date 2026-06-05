@@ -10,7 +10,7 @@ import {
     currentProject, currentDir, favorites,
     dragDepth, setDragDepth,
 } from "./state.js";
-import { isFavorite, persistFavorites, updateFavCount } from "./favorites.js";
+import { isFavorite, persistFavorites, updateFavCount, renderFavorites } from "./favorites.js";
 import { apiUpload, apiFetchUrl } from "./api.js";
 import { selectCard } from "./selection.js";
 
@@ -208,13 +208,14 @@ document.addEventListener("drop", async (e) => {
     previewInfo.textContent = `⚠ 파일/URL 인식 실패. 데이터 타입: [${types || "없음"}]. 이미지를 PC에 먼저 저장 후 드래그해 보세요.`;
 });
 
-export async function uploadFiles(project, dir, files, dropSourceIds = null) {
+export async function uploadFiles(project, dir, files, dropSourceIds = null, opts = {}) {
+    const { isSource = false, silent = false, reload = true } = opts;
     const total = files.length;
     let done = 0, fails = 0;
     const uploaded = [];
     for (const file of files) {
         done += 1;
-        previewInfo.textContent = `업로드 중 ${done}/${total}: ${file.name} (${humanSize(file.size)})...`;
+        if (!silent) previewInfo.textContent = `업로드 중 ${done}/${total}: ${file.name} (${humanSize(file.size)})...`;
         try {
             const { ok, data } = await apiUpload(project, dir, file);
             if (ok) uploaded.push(data);
@@ -222,35 +223,43 @@ export async function uploadFiles(project, dir, files, dropSourceIds = null) {
         } catch { fails += 1; }
     }
 
-    // 모든 업로드 파일을 자동 즐겨찾기 등록 (ID 부여 보장)
-    // sourceIds: 외부 도구가 동봉한 application/x-source-ids 가 있으면 자동 lineage,
-    //           없으면 빈 배열 (부모 없음).
+    // 모든 업로드 파일을 자동 즐겨찾기 등록 (ID 부여 보장).
+    // 신규 favorite 객체들은 ref chip / 외부에서 활용 가능하도록 반환.
+    const newFavorites = [];
     if (uploaded.length > 0) {
         const resolvedSourceIds = (dropSourceIds && dropSourceIds.length)
             ? [...dropSourceIds] : [];
         for (const u of uploaded) {
             if (!isFavorite(project, u.path)) {
-                favorites.push({
+                const fav = {
                     id: generateId(),
                     project,
                     path: u.path,
                     tags: [],
                     note: "",
                     sourceIds: [...resolvedSourceIds],
-                    isSource: false,   // 사용자가 명시적으로 토글해야 소스 탭에 노출
+                    isSource,   // 호출자가 true 주면 즉시 소스 탭에 노출
                     addedAt: Date.now(),
-                });
+                };
+                favorites.push(fav);
+                newFavorites.push(fav);
             }
         }
         persistFavorites();
         updateFavCount();
+        renderFavorites();
+        // spotlight cache + 다른 listener 동기화 (reload=false 케이스에도 보장)
+        try { window.dispatchEvent(new CustomEvent("pv:favorites-changed")); } catch {}
     }
 
     const stayDir = currentDir;
-    await _reloadTreeAndShow(project, stayDir);
-    const srcNote = (dropSourceIds && dropSourceIds.length)
-        ? ` ✓ 부모 ${dropSourceIds.length}개 자동 연결` : ` (부모 없음)`;
-    previewInfo.textContent = fails > 0
-        ? `업로드: ${total - fails}/${total} 성공, ${fails} 실패`
-        : `📁 ${stayDir || "(루트)"} · ${total}개 업로드 완료 —${srcNote}`;
+    if (reload) await _reloadTreeAndShow(project, stayDir);
+    if (!silent) {
+        const srcNote = (dropSourceIds && dropSourceIds.length)
+            ? ` ✓ 부모 ${dropSourceIds.length}개 자동 연결` : ` (부모 없음)`;
+        previewInfo.textContent = fails > 0
+            ? `업로드: ${total - fails}/${total} 성공, ${fails} 실패`
+            : `📁 ${stayDir || "(루트)"} · ${total}개 업로드 완료 —${srcNote}`;
+    }
+    return { uploaded, newFavorites, fails };
 }

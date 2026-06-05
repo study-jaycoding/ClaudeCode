@@ -7,6 +7,8 @@ import { showToast } from "./toast.js";
 import { openFavPicker, closeFavPicker, isFavPickerOpen, loadFavorites } from "./favPicker.js";
 import { state, cache, sourceFavorites } from "./state.js";
 import { favName } from "./refModel.js";
+import { uploadFiles } from "../upload.js";
+import { currentProject as viewerCurrentProject, currentDir as viewerCurrentDir } from "../state.js";
 import {
     updateModelChip, updateRatioChip, renderDynamicOptions, filterModelsByType,
 } from "./modelControls.js";
@@ -171,18 +173,46 @@ function addDirectRef(url) {
     insertChipAtCaret(ref, false);
 }
 
+// 외부 파일(OS drop / 붙여넣기) 을 처리.
+// 프로젝트가 선택돼 있으면: 현재 폴더에 영구 저장 + favorites 자동 등록 (isSource=true)
+//                       → 다음 번에도 @ picker 에서 소스로 재사용 가능 + ref chip.
+// 프로젝트 미선택 시: temp 업로드 fallback (1회용 ref).
 async function uploadAndAddRef(file) {
+    const project = viewerCurrentProject;
+    if (project) {
+        try {
+            const dir = viewerCurrentDir || "";
+            const { newFavorites, fails } = await uploadFiles(
+                project, dir, [file], null,
+                { isSource: true, silent: true, reload: false }
+            );
+            if (fails > 0 || newFavorites.length === 0) {
+                showToast(`업로드 실패: ${file.name}`, null, true);
+                return;
+            }
+            const fav = newFavorites[0];
+            // viewer 의 favorites 배열에 추가됨 → spotlight cache 도 pv:favorites-changed
+            // 로 자동 동기화. ref chip 은 즉시 favorite 객체로 삽입.
+            insertChipAtCaret({
+                ...fav,
+                localThumb: URL.createObjectURL(file),   // 즉시 표시 (서버 round-trip 회피)
+            }, false);
+            return;
+        } catch (err) {
+            showToast("업로드 실패: " + err.message, null, true);
+            return;
+        }
+    }
+    // fallback — 프로젝트 미선택 시 기존 temp 업로드 1회용
     try {
         const data = await postUpload(file);
         const dotIdx = file.name.lastIndexOf(".");
         const cleanName = dotIdx > 0 ? file.name.substring(0, dotIdx) : file.name;
-        const thumb = URL.createObjectURL(file);
-        const ref = {
+        insertChipAtCaret({
             uploadPath: data.path,
             name: cleanName.substring(0, 20),
-            localThumb: thumb,
-        };
-        insertChipAtCaret(ref, false);
+            localThumb: URL.createObjectURL(file),
+        }, false);
     } catch (err) {
         showToast("업로드 실패: " + err.message, null, true);
     }
