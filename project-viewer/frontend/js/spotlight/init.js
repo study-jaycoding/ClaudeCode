@@ -99,8 +99,10 @@ function bindPromptInput() {
 
     promptInput.addEventListener("keydown", (e) => {
         // Shift+Backspace 는 IME 가드보다 먼저 — 한글 조합 중에도 무조건 전체 지움.
-        // (조합 중 isComposing/keyCode 229 가드에 막혀 첫 입력 직후 안 되는 문제 회피.)
-        if (e.key === "Backspace" && e.shiftKey) {
+        // (조합 중 e.key 가 "Process" 로 바뀌어 e.key === "Backspace" 매치 실패 →
+        //  e.code (물리 키) 로 검사. 키코드 8 도 fallback.)
+        const isBackspace = e.code === "Backspace" || e.key === "Backspace" || e.keyCode === 8;
+        if (isBackspace && e.shiftKey) {
             e.preventDefault();
             e.stopPropagation();
             // composition 강제 종료 후 clear — IME 잔존 상태 방지
