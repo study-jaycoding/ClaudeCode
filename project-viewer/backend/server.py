@@ -1302,7 +1302,18 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(404, {"error": "프로젝트를 찾을 수 없습니다."})
             return
         target_dir = safe_resolve(project_dir, rel_dir) if rel_dir else project_dir
-        if target_dir is None or not target_dir.is_dir():
+        if target_dir is None:
+            self._send_json(404, {"error": "대상 폴더 경로가 잘못되었습니다."})
+            return
+        # 폴더가 없으면 자동 생성 — Reference/scratch/ 같은 자동 분리 폴더 대응.
+        # safe_resolve 가 project_dir 안으로 격리하므로 path traversal 안전.
+        if not target_dir.exists():
+            try:
+                target_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                self._send_json(500, {"error": f"폴더 생성 실패: {e}"})
+                return
+        if not target_dir.is_dir():
             self._send_json(404, {"error": "대상 폴더를 찾을 수 없습니다."})
             return
 

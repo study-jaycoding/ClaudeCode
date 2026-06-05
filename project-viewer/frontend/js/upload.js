@@ -229,7 +229,7 @@ document.addEventListener("drop", async (e) => {
 });
 
 export async function uploadFiles(project, dir, files, dropSourceIds = null, opts = {}) {
-    const { isSource = false, silent = false, reload = true } = opts;
+    const { isSource = false, silent = false, reload = true, tags = null } = opts;
     const total = files.length;
     let done = 0, fails = 0;
     const uploaded = [];
@@ -255,7 +255,7 @@ export async function uploadFiles(project, dir, files, dropSourceIds = null, opt
                     id: generateId(),
                     project,
                     path: u.path,
-                    tags: [],
+                    tags: Array.isArray(tags) ? [...tags] : [],
                     note: "",
                     sourceIds: [...resolvedSourceIds],
                     isSource,   // 호출자가 true 주면 즉시 소스 탭에 노출

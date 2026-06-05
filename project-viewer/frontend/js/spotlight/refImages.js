@@ -8,7 +8,7 @@ import { openFavPicker, closeFavPicker, isFavPickerOpen, loadFavorites } from ".
 import { state, cache, sourceFavorites } from "./state.js";
 import { favName } from "./refModel.js";
 import { uploadFiles } from "../upload.js";
-import { currentProject as viewerCurrentProject, currentDir as viewerCurrentDir } from "../state.js";
+import { currentProject as viewerCurrentProject } from "../state.js";
 import {
     updateModelChip, updateRatioChip, renderDynamicOptions, filterModelsByType,
 } from "./modelControls.js";
@@ -174,17 +174,20 @@ function addDirectRef(url) {
 }
 
 // 외부 파일(OS drop / 붙여넣기) 을 처리.
-// 프로젝트가 선택돼 있으면: 현재 폴더에 영구 저장 + favorites 자동 등록 (isSource=true)
-//                       → 다음 번에도 @ picker 에서 소스로 재사용 가능 + ref chip.
+// 프로젝트가 선택돼 있으면: 프로젝트의 Reference/scratch/ 에 영구 저장 +
+//   favorites 자동 등록 (isSource=true, tags=["scratch"]) → 다음 번에도 @ picker
+//   에서 소스로 재사용 가능 + ref chip. 작업 폴더와 섞이지 않게 격리되어
+//   나중에 ` 의 #scratch 필터로 일괄 정리 가능.
 // 프로젝트 미선택 시: temp 업로드 fallback (1회용 ref).
+const SCRATCH_DIR = "Reference/scratch";
+const SCRATCH_TAG = "scratch";
 async function uploadAndAddRef(file) {
     const project = viewerCurrentProject;
     if (project) {
         try {
-            const dir = viewerCurrentDir || "";
             const { newFavorites, fails } = await uploadFiles(
-                project, dir, [file], null,
-                { isSource: true, silent: true, reload: false }
+                project, SCRATCH_DIR, [file], null,
+                { isSource: true, silent: true, reload: false, tags: [SCRATCH_TAG] }
             );
             if (fails > 0 || newFavorites.length === 0) {
                 showToast(`업로드 실패: ${file.name}`, null, true);
