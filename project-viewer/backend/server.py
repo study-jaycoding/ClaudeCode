@@ -812,19 +812,22 @@ class Handler(BaseHTTPRequestHandler):
                 # 생성 실패 (Pillow 없음 / ffmpeg 없음 / 손상 파일 등) — 원본 그대로 응답
                 self._send_media(src); return
 
+            # immutable 빼고 must-revalidate — 같은 path 에 새 파일이 들어오는 케이스
+            # (unique_path 가 옛 이름 재사용) 에서 브라우저가 옛 thumb 고집하던 버그.
+            # ETag 로 매번 304 검증 (localhost 라 비용 무시 가능).
             stat = thumb_path.stat()
             etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
             if self.headers.get("If-None-Match") == etag:
                 self.send_response(304)
                 self.send_header("ETag", etag)
-                self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+                self.send_header("Cache-Control", "public, max-age=0, must-revalidate")
                 self.end_headers()
                 return
             data = thumb_path.read_bytes()
             self.send_response(200)
             self.send_header("Content-Type", "image/jpeg")
             self.send_header("Content-Length", str(len(data)))
-            self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+            self.send_header("Cache-Control", "public, max-age=0, must-revalidate")
             self.send_header("ETag", etag)
             self.end_headers()
             self.wfile.write(data)
