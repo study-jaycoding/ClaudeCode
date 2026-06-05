@@ -638,6 +638,13 @@ function _renderTagFilterInto(target) {
 }
 
 export function renderTagFilterBar() {
+    // activeTagFilter 가 더 이상 존재하지 않는 태그면 자동으로 전체로 reset.
+    // (#scratch 파일이 모두 정리되면 chip 은 사라지는데 activeTagFilter 가
+    //  "scratch" 그대로 남아 "스크래치 태그 없음" 빈 화면 표시되던 버그.)
+    if (activeTagFilter) {
+        const tags = getAllTags();
+        if (!tags.includes(activeTagFilter)) setActiveTagFilter(null);
+    }
     _renderTagFilterInto(tagFilterBar);
     // 우측 그리드 영역(있다면)도 함께 갱신
     _renderTagFilterInto(document.getElementById("source-tag-filter-bar"));
