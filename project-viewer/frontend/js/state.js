@@ -191,10 +191,11 @@ export function setSidebarOpen(v) {
 export let currentView = "grid";  // "grid" | "list"
 export function setCurrentView(v) { currentView = v; }
 
-export let currentSortKey = "name";  // name | kind | size | mtime
+// 기본: 수정일 + 내림차순 = 최근에 생성/수정된 파일이 위로.
+export let currentSortKey = "mtime";  // name | kind | size | mtime | addedAt | tag
 export function setCurrentSortKey(v) { currentSortKey = v; }
 
-export let currentSortDir = "asc";  // asc | desc
+export let currentSortDir = "desc";  // asc | desc — 기본 내림 (최신 위)
 export function setCurrentSortDir(v) { currentSortDir = v; }
 
 // --- 선택 / lasso ---
