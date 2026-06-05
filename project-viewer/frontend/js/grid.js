@@ -263,6 +263,17 @@ function _flattenAllFiles(node, out = []) {
 }
 
 export function showFolderGrid(project, node) {
+    // 생성/보기 탭은 Result/ 안에서만 이동 가능 — Result/ 밖 진입 시도 시 Result 로 강제.
+    if ((activeTab === "generated" || activeTab === "viewer") && node && rootTree) {
+        const p = node.path || "";
+        if (p !== RESULT_DIR && !p.startsWith(RESULT_DIR + "/")) {
+            const resultNode = findNodeByPath(rootTree, RESULT_DIR);
+            if (resultNode) {
+                node = resultNode;
+                setCurrentDir(RESULT_DIR);
+            }
+        }
+    }
     previewInfo.innerHTML = _renderBreadcrumb(project, node, node.children.length);
 
     if (node.children.length === 0) {
