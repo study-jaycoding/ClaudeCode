@@ -113,6 +113,26 @@ function bindPromptInput() {
             return;
         }
 
+        // Esc 도 IME 가드보다 먼저 — 한글 조합 중 ` 태그/@ ref picker 가 안 닫히던 문제.
+        // 조합 중 e.key 가 "Process" 로 바뀌어도 e.code === "Escape" 는 유지.
+        const isEscape = e.code === "Escape" || e.key === "Escape" || e.keyCode === 27;
+        if (isEscape) {
+            if (isTagPickerOpen()) {
+                e.preventDefault();
+                e.stopPropagation();
+                closeTagPicker();
+                stripSlashQuery();
+                return;
+            }
+            if (isFavPickerOpen()) {
+                e.preventDefault();
+                e.stopPropagation();
+                closeFavPicker();
+                stripAtQuery();
+                return;
+            }
+        }
+
         if (isComposing || e.isComposing || e.keyCode === 229) return;
 
         // promptInput 안의 모든 keydown 은 글로벌로 안 새게 한다.
