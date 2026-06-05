@@ -41,7 +41,19 @@ export function isSourceFav(f) {
 
 // @ 피커 / 태그 필터가 검색하는 집합:
 // viewer 에서 선택된 프로젝트의 소스만. 프로젝트 미선택 시 빈 배열.
-export function sourceFavorites() {
+// #scratch 태그 fav 는 기본 숨김 — 외부 drop/paste 일회성 격리.
+// 명시적으로 보려면 opts.includeScratch=true (호출자가 tagFilter==="scratch" 일 때).
+const SCRATCH_TAG = "scratch";
+export function isScratchFav(f) {
+    return Array.isArray(f && f.tags) && f.tags.includes(SCRATCH_TAG);
+}
+export function sourceFavorites(opts = {}) {
     if (!viewerCurrentProject) return [];
-    return cache.favorites.filter((f) => f.project === viewerCurrentProject && isSourceFav(f));
+    const { includeScratch = false } = opts;
+    return cache.favorites.filter((f) => {
+        if (f.project !== viewerCurrentProject) return false;
+        if (!isSourceFav(f)) return false;
+        if (!includeScratch && isScratchFav(f)) return false;
+        return true;
+    });
 }

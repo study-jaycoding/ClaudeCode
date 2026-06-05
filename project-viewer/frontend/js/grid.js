@@ -573,7 +573,9 @@ function renderGridCard(project, child) {
 // =====================================================================
 
 export function showSourceGrid(filterTag) {
-    let filtered = sourceFavorites();
+    // #scratch 태그 활성 시에만 scratch fav 노출 — 격리 정책.
+    const showScratch = filterTag === "scratch";
+    let filtered = sourceFavorites({ includeScratch: showScratch });
     if (filterTag) {
         filtered = filtered.filter((f) => (f.tags || []).includes(filterTag));
     }

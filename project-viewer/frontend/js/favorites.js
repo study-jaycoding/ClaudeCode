@@ -199,9 +199,22 @@ export function isSourceFav(fav) {
 }
 // 현재 viewer 에서 선택된 프로젝트의 소스만 반환.
 // 프로젝트 미선택 시 빈 배열 — 소스 탭/사이드바 모두에 자동 적용됨.
-export function sourceFavorites() {
+// #scratch 태그가 붙은 fav 는 기본 숨김 (외부 drop/paste 의 일회성 파일 격리).
+// 명시적으로 보려면 opts.includeScratch=true 또는 호출자가 activeTagFilter==="scratch"
+// 같은 컨텍스트에서 명시.
+const SCRATCH_TAG = "scratch";
+export function isScratchFav(f) {
+    return Array.isArray(f && f.tags) && f.tags.includes(SCRATCH_TAG);
+}
+export function sourceFavorites(opts = {}) {
     if (!currentProject) return [];
-    return favorites.filter((f) => f.project === currentProject && isSourceFav(f));
+    const { includeScratch = false } = opts;
+    return favorites.filter((f) => {
+        if (f.project !== currentProject) return false;
+        if (!isSourceFav(f)) return false;
+        if (!includeScratch && isScratchFav(f)) return false;
+        return true;
+    });
 }
 
 // --- CRUD ---
@@ -327,7 +340,9 @@ export function toggleSource(project, path) {
 }
 
 // --- NEW 알림 (seenAt 기반) ---
+// scratch 태그가 붙은 fav 는 NEW 안 붙임 — 일회성 격리 폴더라 알림 노이즈.
 function _isUnseen(f, trigger) {
+    if (isScratchFav(f)) return false;
     return !(f.seenAt && f.seenAt >= trigger);
 }
 // fav 가 "다시 NEW 가 되어야 하는 가장 최근 사건" 의 시각.
@@ -579,8 +594,10 @@ export function attachTagAutocomplete(input) {
 }
 
 export function getAllTags() {
+    // scratch 포함 — 그래야 #scratch 칩이 태그 필터 바에 노출되어 사용자가
+    // 클릭으로 정리 화면 진입 가능.
     const set = new Set();
-    sourceFavorites().forEach((f) => (f.tags || []).forEach((t) => set.add(t)));
+    sourceFavorites({ includeScratch: true }).forEach((f) => (f.tags || []).forEach((t) => set.add(t)));
     return [...set].sort();
 }
 
@@ -591,7 +608,8 @@ export function getAllTags() {
 function _renderTagFilterInto(target) {
     if (!target) return;
     const tags = getAllTags();
-    const sources = sourceFavorites();
+    // count 도 scratch 포함해서 정확히 — #scratch 칩의 (N) 도 의미 있게.
+    const sources = sourceFavorites({ includeScratch: true });
     target.innerHTML = "";
     if (tags.length === 0 && sources.length === 0) return;
 
@@ -625,8 +643,9 @@ export function renderTagFilterBar() {
 }
 
 // 태그를 모든 source favorite 에서 영구 제거 (확인 후) + undo.
+// scratch 포함해서 정확히 — 사용자가 #scratch 자체를 제거하는 경우도 가능.
 export function removeTagFromAll(tag) {
-    const affected = sourceFavorites().filter((f) => (f.tags || []).includes(tag));
+    const affected = sourceFavorites({ includeScratch: true }).filter((f) => (f.tags || []).includes(tag));
     if (affected.length === 0) return;
     if (!confirm(`'#${tag}' 태그를 ${affected.length}개 항목에서 모두 제거하시겠습니까?`)) return;
     const ids = affected.map((f) => f.id);
@@ -659,7 +678,9 @@ export function renderFavorites() {
 }
 
 export function renderFavoritesItems() {
-    let filtered = sourceFavorites();
+    // #scratch 태그 활성 시에만 scratch fav 포함.
+    const showScratch = activeTagFilter === SCRATCH_TAG;
+    let filtered = sourceFavorites({ includeScratch: showScratch });
     if (activeTagFilter) {
         filtered = filtered.filter((f) => (f.tags || []).includes(activeTagFilter));
     }

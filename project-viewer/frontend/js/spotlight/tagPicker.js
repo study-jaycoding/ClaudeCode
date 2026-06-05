@@ -15,8 +15,11 @@ import { getSlashQueryInfo, stripSlashQuery } from "./prompt.js";
 import { registerCloser } from "./dropdowns.js";
 
 function getAllTags() {
+    // scratch 도 포함해서 사용자가 #scratch 칩 선택 가능 → 격리 폴더 진입.
     const set = new Set();
-    sourceFavorites().forEach((f) => Array.isArray(f.tags) && f.tags.forEach((t) => set.add(t)));
+    sourceFavorites({ includeScratch: true }).forEach((f) =>
+        Array.isArray(f.tags) && f.tags.forEach((t) => set.add(t))
+    );
     return [...set].sort();
 }
 
@@ -73,7 +76,8 @@ export function renderTagList() {
     }
     tagList.innerHTML = "";
     pickerState.filteredTags.forEach((tag, i) => {
-        const count = sourceFavorites().filter((f) => Array.isArray(f.tags) && f.tags.includes(tag)).length;
+        const count = sourceFavorites({ includeScratch: true })
+            .filter((f) => Array.isArray(f.tags) && f.tags.includes(tag)).length;
         const item = document.createElement("div");
         item.className = "fav-item"
             + (tag === pickerState.tagFilter ? " selected" : "")

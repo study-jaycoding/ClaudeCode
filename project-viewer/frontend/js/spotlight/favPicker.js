@@ -57,7 +57,9 @@ export function renderFavList() {
     }
 
     // viewer "소스" 탭과 동일 집합으로만 검색.
-    let base = sourceFavorites();
+    // tagFilter === "scratch" 일 때만 scratch fav 노출 (격리 폴더).
+    const showScratch = pickerState.tagFilter === "scratch";
+    let base = sourceFavorites({ includeScratch: showScratch });
     if (pickerState.tagFilter) {
         base = base.filter((f) => Array.isArray(f.tags) && f.tags.includes(pickerState.tagFilter));
     }

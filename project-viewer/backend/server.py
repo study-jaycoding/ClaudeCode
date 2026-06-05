@@ -421,6 +421,10 @@ def _fill_tree(directory: Path, parent_node: dict, prefix: str) -> None:
         # 미디어 뷰어 트리에서는 숨김 (디스크에는 그대로 둠).
         if entry.is_file() and entry.name.lower() == "readme.md":
             continue
+        # Reference/scratch/ — 외부 drag-drop / 클립보드 capture 의 일회성 파일 격리 폴더.
+        # 트리/그리드에서 숨김. spotlight 의 #scratch 태그 필터로만 접근 (정리·재사용 용).
+        if entry.is_dir() and entry.name == "scratch" and prefix.rstrip("/") == "Reference":
+            continue
         rel = f"{prefix}{entry.name}"
         if entry.is_dir():
             child = {"name": entry.name, "type": "dir", "path": rel, "children": []}
