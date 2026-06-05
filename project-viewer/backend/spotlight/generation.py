@@ -126,7 +126,22 @@ def _collect_one(data) -> tuple[list[str], list[dict], str | None]:
         e = data["error"]
         if isinstance(e, dict):
             e = e.get("message", json.dumps(e, ensure_ascii=False))
-        err_parts.append(str(e))
+        # raw_stderr 도 함께 노출 — silent fail 진단의 핵심 단서
+        raw_stderr = data.get("_raw_stderr")
+        if raw_stderr:
+            err_parts.append(f"{e} (stderr: {raw_stderr[:200]})")
+        else:
+            err_parts.append(str(e))
+    elif isinstance(data, dict) and data.get("ok") and not data.get("output"):
+        # CLI 가 exit 0 + 빈 stdout 으로 silent 종료 — create 명령이 기대한 jid 없음.
+        # raw_stderr 가 있으면 그것이 진단 단서.
+        raw_stderr = data.get("_raw_stderr") or ""
+        if raw_stderr:
+            err_parts.append(f"CLI 가 빈 응답으로 silent 종료 (stderr: {raw_stderr[:300]})")
+        else:
+            err_parts.append("CLI 가 exit 0 + 빈 stdout 으로 silent 종료 — "
+                             "ref 업로드 실패 / 모델 거부 / 인자 검증 실패 가능. "
+                             "백엔드 로그의 [hf-cli] 줄에서 명령어 확인.")
     elif isinstance(data, dict):
         _scan(data)
     elif data is None:
@@ -212,8 +227,19 @@ def _create_and_wait_one(
     subprocess timeout 으로 죽어도 entry 가 복구 트래킹 가능. (2) URL 을 받자마자
     entry.result_urls 에도 누적 저장 → 다운로드 실패해도 URL 만은 보존.
     """
+    # create — 한 번 실패 시 한 번 더 재시도 (네트워크 일시 장애 / silent CLI 실패 대비).
     create_data = run_cli(*create_args, timeout=CREATE_TIMEOUT_SEC)
     jobs, _imgs_unused, create_err = _collect_one(create_data)
+    if not jobs:
+        import time as _t
+        _t.sleep(1.0)
+        retry_data = run_cli(*create_args, timeout=CREATE_TIMEOUT_SEC)
+        retry_jobs, _imgs2, retry_err = _collect_one(retry_data)
+        if retry_jobs:
+            jobs = retry_jobs
+            create_err = None
+        elif retry_err and not create_err:
+            create_err = retry_err
 
     # ★ create 가 job_id 를 만들었으면 즉시 jobs_log 에 저장 (wait 죽음 대비)
     if queue_id and jobs:
