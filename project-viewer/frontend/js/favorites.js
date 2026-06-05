@@ -229,11 +229,12 @@ export function persistFavorites() {
     _lastPersistAt = Date.now();
     // 프로젝트별 분리 — 현재 프로젝트의 favorites 만 저장 (현재 메모리는 그 프로젝트만 보유)
     const proj = currentProject;
-    if (!proj) return;  // 프로젝트 없으면 저장 안 함 (data lost 방지)
+    if (!proj) return _persistChain;  // 프로젝트 없으면 저장 안 함 (data lost 방지)
     const projFavs = favorites.filter((f) => f.project === proj);
     _persistChain = _persistChain
         .then(() => apiPersistFavorites(proj, projFavs))
         .catch(() => {});
+    return _persistChain;
 }
 // SSE callback 에서 사용 — 자기 자신이 방금 쓴 변경으로 발화된 SSE 는 무시.
 // 1.5s 안에 다른 클라이언트의 변경이 끼면 그건 다음 SSE tick (≤1s) 에서 잡힘.

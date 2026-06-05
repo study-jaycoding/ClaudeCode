@@ -265,7 +265,10 @@ export async function uploadFiles(project, dir, files, dropSourceIds = null, opt
                 newFavorites.push(fav);
             }
         }
-        persistFavorites();
+        // POST 완료까지 await — 그 사이 SSE 가 fire 해도 isOwnPersistRecent 가드가
+        // 잡고, persist 끝난 후 backend 와 in-memory 가 100% 일치. 연속 paste 시
+        // race 로 favorite 사라지던 버그 회피.
+        await persistFavorites();
         updateFavCount();
         renderFavorites();
         // spotlight cache + 다른 listener 동기화 (reload=false 케이스에도 보장)
