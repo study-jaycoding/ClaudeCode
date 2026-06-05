@@ -4063,6 +4063,16 @@ video.fav-item-thumb {
     background: rgba(212, 255, 94, 0.10);
     border-color: #d4ff5e;
 }
+/* 다중 선택 (Ctrl/Shift+Click) — active(재생중) 와 구별되는 파랑 톤. */
+.vt-item.selected {
+    background: rgba(96, 165, 250, 0.14);
+    border-color: #60a5fa;
+}
+.vt-item.active.selected {
+    background: rgba(212, 255, 94, 0.12);
+    border-color: #d4ff5e;
+    box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.55) inset;
+}
 .vt-item.dragging { opacity: 0.4; }
 
 /* 사이드바 트랙 아이템 RGB 마커 — 다른 탭에서 설정한 colors[path] 반영 */

@@ -69,10 +69,23 @@ const IMAGE_DEFAULT_SEC = 4;
 // === 내부 상태 ===
 let _track = [];                 // Slot[]
 let _playing = false;
-let _curIdx = -1;
+let _curIdx = -1;                // 재생 중인 슬롯 (active)
 let _imgTimer = null;
 let _tickTimer = null;
 let _clipStartedAt = 0;
+
+// 다중 선택 (탐색기 패턴) — Ctrl+Click 토글, Shift+Click 범위. Delete 로 일괄 제거.
+// _curIdx (재생 위치) 와 별개. 재생은 그대로 두고 일괄 작업만 위해.
+const _selectedSlots = new Set();
+let _anchorIdx = -1;
+
+function _clearSlotSelection() { _selectedSlots.clear(); _anchorIdx = -1; }
+function _syncSlotSelectionDOM() {
+    if (!viewerTrackList) return;
+    viewerTrackList.querySelectorAll(".vt-item").forEach((el, k) => {
+        el.classList.toggle("selected", _selectedSlots.has(k));
+    });
+}
 
 const _vSlots = [
     { el: viewerV0, idx: -1 },
@@ -234,7 +247,10 @@ function _renderSidebar() {
         const layer = _primary(slot);
         // 다른 탭에서 입력한 RGB 컬러 마커 — colors[path] 가 "red"/"green"/"blue"
         const cardColor = colors[layer.path] || "";
-        li.className = "vt-item" + (i === _curIdx ? " active" : "") + (cardColor ? " vt-color-" + cardColor : "");
+        li.className = "vt-item"
+            + (i === _curIdx ? " active" : "")
+            + (_selectedSlots.has(i) ? " selected" : "")
+            + (cardColor ? " vt-color-" + cardColor : "");
         li.dataset.idx = String(i);
         li.draggable = true;
         const layerCount = slot.layers.length;
@@ -263,7 +279,12 @@ function _renderSidebar() {
         `;
         li.addEventListener("click", (e) => {
             if (e.target.closest(".vt-remove")) {
-                _removeSlot(i);
+                // 다중 선택 중이면 선택된 모두 제거, 아니면 단일.
+                if (_selectedSlots.has(i) && _selectedSlots.size > 1) {
+                    _removeSlots(Array.from(_selectedSlots));
+                } else {
+                    _removeSlot(i);
+                }
                 e.stopPropagation();
                 return;
             }
@@ -283,8 +304,32 @@ function _renderSidebar() {
                 });
                 return;
             }
-            // 이름/시간 등 다른 부분 클릭 = "이 슬롯을 현재로 선택" 만 (자동재생 X).
-            // 재생은 ▶ 재생 버튼을 눌러야 시작.
+            // 탐색기 패턴 다중 선택:
+            //   Ctrl/Cmd+Click → 토글 (anchor 갱신, 재생 위치 안 건드림)
+            //   Shift+Click   → anchor~i 범위 (재생 위치 안 건드림)
+            //   단순 Click    → 단일 선택 + seekTo (기존 동작)
+            if (e.ctrlKey || e.metaKey) {
+                if (_selectedSlots.has(i)) _selectedSlots.delete(i);
+                else _selectedSlots.add(i);
+                _anchorIdx = i;
+                _syncSlotSelectionDOM();
+                e.stopPropagation();
+                return;
+            }
+            if (e.shiftKey && _anchorIdx >= 0) {
+                _selectedSlots.clear();
+                const lo = Math.min(_anchorIdx, i);
+                const hi = Math.max(_anchorIdx, i);
+                for (let k = lo; k <= hi; k++) _selectedSlots.add(k);
+                _syncSlotSelectionDOM();
+                e.stopPropagation();
+                return;
+            }
+            // 단일 클릭 — 다중 선택 모두 해제 + 이 슬롯만 + 재생 위치 갱신
+            _clearSlotSelection();
+            _selectedSlots.add(i);
+            _anchorIdx = i;
+            _syncSlotSelectionDOM();
             _seekTo(i, false);
         });
         li.addEventListener("contextmenu", (e) => {
@@ -1223,6 +1268,42 @@ function _removeSlot(i) {
     });
 }
 
+// 다중 슬롯 제거 — 인덱스 배열을 큰 것부터 정렬해 splice 인덱스 안 어긋남.
+// undo 한 번에 모두 복원.
+function _removeSlots(indices) {
+    const sorted = Array.from(new Set(indices)).filter((i) => i >= 0 && i < _track.length)
+                                                .sort((a, b) => b - a);
+    if (sorted.length === 0) return;
+    if (sorted.length === 1) { _removeSlot(sorted[0]); return; }
+    const snapshots = sorted.map((i) => ({ idx: i, slot: JSON.parse(JSON.stringify(_track[i])) }));
+    for (const i of sorted) _track.splice(i, 1);
+    // 재생 위치 조정
+    if (sorted.includes(_curIdx)) {
+        _curIdx = -1;
+        pause();
+        _hideAllMedia();
+        _activeSlot = -1;
+    } else if (_curIdx > 0) {
+        const removedBefore = sorted.filter((i) => i < _curIdx).length;
+        _curIdx -= removedBefore;
+    }
+    _vSlots.forEach((s) => { s.idx = -1; });
+    _clearSlotSelection();
+    _saveTrack();
+    _renderAll();
+    pushUndo(`슬롯 ${sorted.length}개 제거`, () => {
+        // 작은 인덱스부터 복원 — 원래 위치 유지.
+        const asc = snapshots.slice().sort((a, b) => a.idx - b.idx);
+        for (const { idx, slot } of asc) {
+            const at = Math.min(idx, _track.length);
+            _track.splice(at, 0, slot);
+        }
+        _vSlots.forEach((s) => { s.idx = -1; });
+        _saveTrack();
+        _renderAll();
+    });
+}
+
 function _removeLayer(slotIdx, layerIdx) {
     const slot = _track[slotIdx];
     if (!slot) return;
@@ -1445,8 +1526,31 @@ document.addEventListener("keydown", (e) => {
     else if (e.key === "ArrowLeft") { prevClip(); e.preventDefault(); }
     else if (e.key === "Delete") {
         // Backspace 는 의도적으로 제외 — 그리드에서 "부모 폴더로" 동작 (keyboard.js) 과 충돌 회피.
-        // 트랙 슬롯 제거는 Del 키 / × 버튼 / 컨텍스트 메뉴로.
-        if (_curIdx >= 0) { _removeSlot(_curIdx); e.preventDefault(); }
+        // 트랙 슬롯 제거: 다중 선택이 있으면 그것 모두, 아니면 _curIdx 만.
+        if (_selectedSlots.size > 0) {
+            _removeSlots(Array.from(_selectedSlots));
+            e.preventDefault();
+        } else if (_curIdx >= 0) {
+            _removeSlot(_curIdx);
+            e.preventDefault();
+        }
+    }
+    else if ((e.key === "a" || e.key === "A") && (e.ctrlKey || e.metaKey)) {
+        // Ctrl/Cmd+A — 트랙 전체 선택
+        if (_track.length > 0) {
+            _selectedSlots.clear();
+            for (let k = 0; k < _track.length; k++) _selectedSlots.add(k);
+            _anchorIdx = _track.length - 1;
+            _syncSlotSelectionDOM();
+            e.preventDefault();
+        }
+    }
+    else if (e.key === "Escape") {
+        if (_selectedSlots.size > 0) {
+            _clearSlotSelection();
+            _syncSlotSelectionDOM();
+            e.preventDefault();
+        }
     }
     else if (e.key === "m" || e.key === "M") { _toggleMute(); e.preventDefault(); }
     else if (e.key === "f" || e.key === "F") { _toggleFullscreen(); e.preventDefault(); }
