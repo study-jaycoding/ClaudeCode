@@ -97,6 +97,16 @@ export function selectTag(tag) {
     closeTagPicker();
     updateTagActiveIndicator();
     promptInput.focus();
+    // 태그 적용 직후 자동으로 그 태그의 ref picker 열기 — 사용자가 @ 안 눌러도
+    // 바로 선택 가능. 동적 import 로 favPicker 와의 순환 import 회피.
+    import("./favPicker.js").then(({ openFavPicker, loadFavorites }) => {
+        pickerState.favHighlight = -1;
+        if (cache.favorites && cache.favorites.length > 0) {
+            openFavPicker();
+        } else {
+            loadFavorites().then(openFavPicker);
+        }
+    }).catch(() => {});
 }
 
 export function clearTagFilter() {
