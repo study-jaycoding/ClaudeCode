@@ -2461,6 +2461,35 @@ body.sidebar-resizing {
     color: #f87171;
 }
 
+/* 큐 카드 우클릭 메뉴 — tree-menu 와 같은 톤. */
+.q-ctx-menu {
+    position: fixed;
+    z-index: 160;
+    background: #1a1f2e;
+    border-radius: 8px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.3);
+    border: 1px solid #3a4256;
+    padding: 4px;
+    min-width: 200px;
+    display: flex;
+    flex-direction: column;
+}
+.q-ctx-menu.hidden { display: none; }
+.q-ctx-menu button {
+    background: transparent;
+    color: #e5e7eb;
+    text-align: left;
+    padding: 8px 12px;
+    border-radius: 5px;
+    font-size: 13px;
+    font-weight: 500;
+    border: none;
+    cursor: pointer;
+}
+.q-ctx-menu button:hover { background: #2a3144; color: #d4ff5e; }
+.q-ctx-menu button.q-ctx-danger { color: #f87171; }
+.q-ctx-menu button.q-ctx-danger:hover { background: #2a1218; color: #fca5a5; }
+
 .tree-menu button.tree-menu-danger:hover {
     background: #2a1218;
     color: #fca5a5;

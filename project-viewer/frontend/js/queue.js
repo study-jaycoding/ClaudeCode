@@ -186,6 +186,12 @@ function _renderItem(job) {
         await apiRemoveJob(job.id);
         await refreshQueue();
     });
+    // 우클릭 → 컨텍스트 메뉴 (다시 다운로드 / 제거)
+    li.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        _openQCtxMenu(e.clientX, e.clientY, job);
+    });
     return li;
 }
 
@@ -220,6 +226,75 @@ async function _doRecover(job, btn) {
     } finally {
         if (btn) { btn.disabled = false; btn.textContent = origLabel; }
     }
+}
+
+// ── 큐 카드 우클릭 컨텍스트 메뉴 ──────────────────────────────────
+// 카드 우클릭 → "다시 다운로드 (Higgsfield)" / "큐에서 제거" 빠른 접근.
+// recover 는 기존 _doRecover 와 동일 — Higgsfield 서버에서 job_ids 로
+// 결과를 다시 조회·다운로드. 사용자가 카드를 지웠다 해도 Higgsfield 에
+// job 이 남아있는 한 (job.id 포함된 큐 entry 면) 복구 가능.
+let _qCtxMenu = null;
+let _qCtxJob = null;
+
+function _ensureQCtxMenu() {
+    if (_qCtxMenu) return _qCtxMenu;
+    _qCtxMenu = document.createElement("div");
+    _qCtxMenu.className = "q-ctx-menu hidden";
+    _qCtxMenu.innerHTML = `
+        <button type="button" data-action="recover" title="Higgsfield 서버에서 결과를 다시 조회·다운로드">↻ 다시 다운로드</button>
+        <button type="button" data-action="open"    title="생성 탭으로 이동해서 결과 보기">📂 생성 탭에서 열기</button>
+        <button type="button" data-action="remove"  class="q-ctx-danger" title="큐 entry 제거 (Higgsfield 의 결과는 그대로 남음)">🗑 큐에서 제거</button>
+    `;
+    document.body.appendChild(_qCtxMenu);
+
+    _qCtxMenu.addEventListener("click", async (e) => {
+        const btn = e.target.closest("button[data-action]");
+        if (!btn) return;
+        e.stopPropagation();
+        const job = _qCtxJob;
+        const action = btn.dataset.action;
+        _closeQCtxMenu();
+        if (!job) return;
+        if (action === "recover") {
+            await _doRecover(job, null);
+        } else if (action === "open") {
+            _openInGenerated(job);
+        } else if (action === "remove") {
+            if (!job.id) return;
+            if (job.status === "running" && !confirm("진행중인 작업입니다. 큐에서 제거하시겠습니까?\n(실제 생성은 백엔드에서 계속될 수 있음)")) return;
+            await apiRemoveJob(job.id);
+            await refreshQueue();
+        }
+    });
+
+    document.addEventListener("click", (e) => {
+        if (!_qCtxMenu.classList.contains("hidden") && !_qCtxMenu.contains(e.target)) {
+            _closeQCtxMenu();
+        }
+    });
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && !_qCtxMenu.classList.contains("hidden")) _closeQCtxMenu();
+    });
+    return _qCtxMenu;
+}
+
+function _openQCtxMenu(x, y, job) {
+    _qCtxJob = job;
+    const menu = _ensureQCtxMenu();
+    menu.classList.remove("hidden");
+    menu.style.left = "0px";
+    menu.style.top = "0px";
+    const rect = menu.getBoundingClientRect();
+    let mx = x + 2, my = y + 2;
+    if (mx + rect.width  > window.innerWidth  - 8) mx = x - rect.width  - 2;
+    if (my + rect.height > window.innerHeight - 8) my = window.innerHeight - rect.height - 8;
+    menu.style.left = Math.max(8, mx) + "px";
+    menu.style.top  = Math.max(8, my) + "px";
+}
+
+function _closeQCtxMenu() {
+    if (_qCtxMenu) _qCtxMenu.classList.add("hidden");
+    _qCtxJob = null;
 }
 
 // ── 오류 상세 모달 ─────────────────────────────────────────────────
