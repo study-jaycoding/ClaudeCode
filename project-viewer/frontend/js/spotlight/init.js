@@ -80,10 +80,10 @@ function reactToTrigger() {
     }
 }
 
-// 프로젝트 바뀌면 cache 도 새로 — 이전 프로젝트 favorites 가 잘못 표시되지 않게.
-window.addEventListener("pv:project-changed", () => { loadFavorites(); });
-// 다른 곳에서 favorites 추가/삭제 시도 cache 동기화.
-window.addEventListener("pv:favorites-changed", () => { loadFavorites(); });
+// cache 동기화는 spotlight/app.js 의 pv:favorites-changed 리스너가 담당
+// (viewerFavorites.slice() 로 직접 복사 → race condition 없음).
+// 여기서 fetch 기반으로 또 호출하면 backend persist 전에 stale 데이터를 받아
+// 덮어쓰는 사고가 남 (소스 추가 직후 우측 picker 에 새 항목 안 보이는 증상).
 
 function bindPromptInput() {
     promptInput.addEventListener("input", () => {
