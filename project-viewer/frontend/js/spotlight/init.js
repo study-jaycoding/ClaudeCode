@@ -65,6 +65,14 @@ function bindPromptInput() {
     promptInput.addEventListener("keydown", (e) => {
         if (isComposing || e.isComposing || e.keyCode === 229) return;
 
+        // promptInput 안의 모든 keydown 은 글로벌로 안 새게 한다.
+        // 이유: selectFavItem → insertChipAtCaret → promptInput.blur() 가 일어나는
+        // 동안 activeElement 가 body 로 바뀌어 document 핸들러의 contenteditable
+        // 가드가 fail. 그 결과 글로벌 Enter 가 grid 의 selected 카드에 openPath
+        // (lightbox) 를 발동시킴.
+        // capture/bubble 둘 다 막아 외부 영향 완전 차단.
+        e.stopPropagation();
+
         // Tag picker 네비게이션
         if (isTagPickerOpen()) {
             if (e.key === "ArrowDown") {
