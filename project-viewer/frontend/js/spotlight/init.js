@@ -26,11 +26,24 @@ export async function loadModels() {
     }
 }
 
+// cache 가 있으면 즉시 open, 백그라운드에서 silent refresh + 재렌더.
+// 매번 fetch → 결과 대기 → open 패턴은 작은 RT 라도 사용자가 "딜레이" 로 느낌.
+// 첫 페이지 로드 시점에 app.js 가 미리 loadFavorites 호출 → cache 준비됨.
+function _openImmediate(openFn, renderFn) {
+    if (cache.favorites && cache.favorites.length > 0) {
+        openFn();
+        // silent refresh — 다른 곳에서 favorites 변경된 경우 백그라운드로 따라잡음.
+        loadFavorites().then(() => { try { renderFn(); } catch {} });
+    } else {
+        loadFavorites().then(openFn);
+    }
+}
+
 function reactToTrigger() {
     const sl = getSlashQueryInfo();
     if (sl && !isTagPickerOpen()) {
         pickerState.tagHighlight = -1;
-        loadFavorites().then(() => openTagPicker());
+        _openImmediate(openTagPicker, renderTagList);
         return;
     }
     if (isTagPickerOpen()) {
@@ -42,13 +55,18 @@ function reactToTrigger() {
     const at = getAtQueryInfo();
     if (at && !isFavPickerOpen()) {
         pickerState.favHighlight = -1;
-        loadFavorites().then(() => openFavPicker());
+        _openImmediate(openFavPicker, renderFavList);
     } else if (isFavPickerOpen()) {
         pickerState.favHighlight = -1;
         if (!at) closeFavPicker();
         else renderFavList();
     }
 }
+
+// 프로젝트 바뀌면 cache 도 새로 — 이전 프로젝트 favorites 가 잘못 표시되지 않게.
+window.addEventListener("pv:project-changed", () => { loadFavorites(); });
+// 다른 곳에서 favorites 추가/삭제 시도 cache 동기화.
+window.addEventListener("pv:favorites-changed", () => { loadFavorites(); });
 
 function bindPromptInput() {
     promptInput.addEventListener("input", () => {
