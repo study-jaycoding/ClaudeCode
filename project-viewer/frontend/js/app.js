@@ -54,6 +54,7 @@ import {
 } from "./upload.js";
 import { startSSE, setSSECallback, setJobsSSECallback } from "./sse.js";
 import { refreshQueue } from "./queue.js";
+import { invalidatePaneCache } from "./tabs.js";
 
 // 사이드 효과 전용 (handler 등록만) — import 만으로 동작
 import "./keyboard.js";
@@ -141,13 +142,35 @@ setSSECallback(() => {
         try { window.dispatchEvent(new CustomEvent("pv:favorites-changed")); } catch {}
     }, 250);
 });
-// jobs-changed: Queue 탭이 active 이면 즉시 갱신, 아니면 running 카운트만 갱신.
+// jobs-changed: 큐 사이드바 + 트리/그리드 모두 갱신.
+// 새 결과 파일이 디스크에 들어와도 트리가 stale 이면 generated 그리드에 안 보이는 버그.
+// pane cache 도 invalidate — 다른 탭 갔다 와도 stale DOM 안 보임.
 let _jobsTimer = null;
+async function _refreshAfterJobsChange() {
+    refreshQueue();
+    // 트리 재조회 — 새 결과 파일이 트리에 반영되어야 그리드가 그것을 찾을 수 있음.
+    if (currentProject) {
+        try {
+            const { ok, data } = await apiGetTree(currentProject);
+            if (ok) setRootTree(data.tree);
+        } catch {}
+    }
+    // 모든 탭 cache 무효 → 다음 진입 시 새 데이터 기준으로 다시 렌더
+    invalidatePaneCache();
+    // 현재 generated/viewer 탭이면 즉시 새로 그림 (사용자가 보고 있는 곳)
+    if (activeTab === "generated" || activeTab === "viewer") {
+        showGeneratedGrid();
+    } else if (activeTab === "tree" && rootTree) {
+        // 구성 탭에서 Result/ 하위를 보고 있을 수도 — 현재 폴더 그리드만 다시
+        const node = findNodeByPath(rootTree, currentDir) || rootTree;
+        showFolderGrid(currentProject, node);
+    }
+}
 setJobsSSECallback(() => {
     if (_jobsTimer) clearTimeout(_jobsTimer);
     _jobsTimer = setTimeout(() => {
         _jobsTimer = null;
-        refreshQueue();
+        _refreshAfterJobsChange();
     }, 200);
 });
 startSSE();
