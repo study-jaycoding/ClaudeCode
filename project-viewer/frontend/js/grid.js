@@ -502,7 +502,9 @@ function renderGridCard(project, child) {
     const url = `/media?project=${encodeURIComponent(project)}&path=${encodeURIComponent(child.path)}`;
 
     // 카드 썸네일은 서버 사전 생성 (/thumb endpoint). 원본 (/media) 은 재생/원본 보기용.
-    const thumbUrl = `/thumb?project=${encodeURIComponent(project)}&path=${encodeURIComponent(child.path)}`;
+    // v= 는 cache buster — 같은 path 의 파일이 새로 들어와도 브라우저 캐시 격리.
+    const _v = child.mtime ? `&v=${child.mtime}` : "";
+    const thumbUrl = `/thumb?project=${encodeURIComponent(project)}&path=${encodeURIComponent(child.path)}${_v}`;
     let thumbInner;
     if (child.kind === "image") {
         thumbInner = `<img data-lazy-src="${thumbUrl}" alt="" loading="lazy" />`;
@@ -653,7 +655,8 @@ function renderSourceCard(fav, kind) {
     card.title = `${fav.path} · ID: ${fav.id}`;
     card.dataset.path = fav.path;
 
-    const thumbUrl = `/thumb?project=${encodeURIComponent(fav.project)}&path=${encodeURIComponent(fav.path)}`;
+    const _fv = fav.addedAt || fav.id || "";
+    const thumbUrl = `/thumb?project=${encodeURIComponent(fav.project)}&path=${encodeURIComponent(fav.path)}${_fv ? `&v=${_fv}` : ""}`;
     let thumbInner;
     if (kind === "image") {
         thumbInner = `<img data-lazy-src="${thumbUrl}" alt="" loading="lazy" />`;

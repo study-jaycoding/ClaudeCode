@@ -166,7 +166,8 @@ function _renderPickerCard(node) {
     el.className = "vp-card vp-card-file" + (color ? " vp-color-" + color : "");
     el.draggable = true;
     el.dataset.path = node.path;
-    const url = `/thumb?project=${encodeURIComponent(currentProject)}&path=${encodeURIComponent(node.path)}`;
+    const _v = node.mtime ? `&v=${node.mtime}` : "";
+    const url = `/thumb?project=${encodeURIComponent(currentProject)}&path=${encodeURIComponent(node.path)}${_v}`;
     const thumb = node.kind === "video"
         ? `<video class="vp-thumb" data-lazy-poster="${url}" preload="none" muted></video>`
         : `<img class="vp-thumb" data-lazy-src="${url}" alt="" loading="lazy" />`;

@@ -13,10 +13,15 @@ export function mediaUrl(ref) {
 // 카드/미리보기용 작은 썸네일 — 서버가 사전 생성·디스크 캐시.
 // 원본 디코드 피함 (28MB PNG → 30KB JPG). favorite 가 아닌 (directUrl/uploadPath)
 // 케이스는 fallback 으로 mediaUrl.
+//
+// cache buster v= : 같은 path 의 새 favorite 가 옛 favorite 의 브라우저 캐시
+// (이전 immutable 응답) 와 격리되도록. backend 는 v 파라미터 무시.
 export function thumbUrl(ref) {
     if (ref.directUrl) return ref.directUrl;
     if (ref.localThumb) return ref.localThumb;
-    return `/thumb?project=${encodeURIComponent(ref.project)}&path=${encodeURIComponent(ref.path)}`;
+    const v = ref.addedAt || ref.id || "";
+    const base = `/thumb?project=${encodeURIComponent(ref.project)}&path=${encodeURIComponent(ref.path)}`;
+    return v ? `${base}&v=${v}` : base;
 }
 
 // 백엔드 generate 에 전달할 URL.

@@ -714,7 +714,8 @@ export function renderFavoritesItems() {
 
 function renderFavItem(fav) {
     const kind = kindFromPath(fav.path);
-    const url = `/thumb?project=${encodeURIComponent(fav.project)}&path=${encodeURIComponent(fav.path)}`;
+    const _fv = fav.addedAt || fav.id || "";
+    const url = `/thumb?project=${encodeURIComponent(fav.project)}&path=${encodeURIComponent(fav.path)}${_fv ? `&v=${_fv}` : ""}`;
     const isNew = isCardNew(fav.project, fav.path);
     const li = document.createElement("li");
     li.className = "fav-item"

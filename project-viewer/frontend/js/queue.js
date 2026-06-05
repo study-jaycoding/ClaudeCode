@@ -65,7 +65,9 @@ function _thumbHtml(job) {
     // 1순위: 로컬 다운로드 완료된 파일 — 서버 /thumb 사용 (한 번 생성 후 디스크 캐시)
     const path = job.thumbnail_path;
     if (path && job.project) {
-        const url = `/thumb?project=${encodeURIComponent(job.project)}&path=${encodeURIComponent(path)}`;
+        // job 의 timestamp 를 cache buster — recover 등으로 같은 path 에 새 결과가 들어와도 격리.
+        const _v = job.started_at || job.id || "";
+        const url = `/thumb?project=${encodeURIComponent(job.project)}&path=${encodeURIComponent(path)}${_v ? `&v=${_v}` : ""}`;
         if (job.kind === "video") {
             return `<video class="q-thumb" data-lazy-poster="${url}" preload="none" muted></video>`;
         }
