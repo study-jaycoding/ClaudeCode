@@ -113,7 +113,7 @@ function bindPromptInput() {
             return;
         }
 
-        // Esc 도 IME 가드보다 먼저 — 한글 조합 중 ` 태그/@ ref picker 가 안 닫히던 문제.
+        // Esc 도 IME 가드보다 먼저 — 한글 조합 중 picker 가 안 닫히던 문제.
         // 조합 중 e.key 가 "Process" 로 바뀌어도 e.code === "Escape" 는 유지.
         const isEscape = e.code === "Escape" || e.key === "Escape" || e.keyCode === 27;
         if (isEscape) {
@@ -129,6 +129,14 @@ function bindPromptInput() {
                 e.stopPropagation();
                 closeFavPicker();
                 stripAtQuery();
+                return;
+            }
+            // picker 가 닫혀있어도 tagFilter 가 활성이면 Esc 로 해제 (badge "x" 와 동등).
+            if (pickerState.tagFilter) {
+                e.preventDefault();
+                e.stopPropagation();
+                clearTagFilter();
+                promptInput.focus();
                 return;
             }
         }
