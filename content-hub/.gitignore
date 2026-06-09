@@ -1,0 +1,13 @@
+# 백엔드
+backend/content_hub.db
+backend/content_hub.db-wal
+backend/content_hub.db-shm
+backend/media/
+__pycache__/
+*.pyc
+.venv/
+
+# 프론트엔드
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo

@@ -1,0 +1,6 @@
+# Content Hub 백엔드 (Phase 2/3)
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2.7
+websockets>=12
+python-multipart>=0.0.9
