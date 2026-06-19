@@ -1,6 +1,7 @@
 // 선택한 결과물들을 프로젝트(작업 묶음)에 담는 드롭다운. 선택바(select-bar)에 표시.
 // 로드맵 §0-4: 프로젝트로 귀속 = 공유·이동의 단위로 묶기.
 import { useEffect, useRef, useState } from "react";
+import { useAskPrompt } from "../lib/prompt";
 import type { Project } from "../types";
 
 export function ProjectAssignMenu({
@@ -16,6 +17,7 @@ export function ProjectAssignMenu({
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const askPrompt = useAskPrompt();
 
   // 바깥 클릭 시 닫기
   useEffect(() => {
@@ -31,11 +33,13 @@ export function ProjectAssignMenu({
     onAssign(projectId);
     setOpen(false);
   };
-  const createNew = () => {
-    const name = window.prompt(`새 프로젝트 이름 (${count}개 담기):`);
-    if (name === null || !name.trim()) return;
-    onCreateAndAssign(name.trim());
+  const createNew = async () => {
     setOpen(false);
+    const name = (
+      await askPrompt(`새 프로젝트 이름 (${count}개 담기)`, "", "프로젝트 이름 ⏎")
+    )?.trim();
+    if (!name) return;
+    onCreateAndAssign(name);
   };
 
   return (

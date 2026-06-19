@@ -143,18 +143,22 @@ def export_bundle(
             by_id[r["generation_id"]]["_auto_tags"].append(r["name"])
 
         # 코멘트(작성자 표기 포함) — 작성자 이름까지 실어 받는 쪽에서 표시되게.
-        for r in conn.execute(
-            f"SELECT c.gen_id, c.id, c.author, w.name AS author_name, c.text, "
+        crows = conn.execute(
+            f"SELECT c.gen_id, c.id, c.author, w.name AS worker_name, c.text, "
             f"c.created_at, c.parent_id, c.muted FROM generation_comment c "
             f"LEFT JOIN worker w ON w.id=c.author WHERE c.gen_id IN ({ph}) "
             f"ORDER BY c.created_at ASC, c.id ASC",
             ids,
-        ).fetchall():
+        ).fetchall()
+        # 작성자명은 단일 해석기(creator.name→account.name→이메일)로 — 받는 쪽이 보내는 사람의
+        # 표시이름 그대로 보게 한다. 옛 worker(author='me')는 worker.name 으로 폴백.
+        cmt_names = identity.resolve_display_names(conn, [r["author"] for r in crows])
+        for r in crows:
             by_id[r["gen_id"]]["_comments"].append(
                 {
                     "id": r["id"],
                     "author": r["author"],
-                    "author_name": r["author_name"],
+                    "author_name": cmt_names.get(r["author"]) or r["worker_name"],
                     "text": r["text"],
                     "created_at": r["created_at"],
                     "parent_id": r["parent_id"],

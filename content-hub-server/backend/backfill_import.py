@@ -37,51 +37,7 @@ from app.config import DEFAULT_WORKER_ID
 from app.db import init_db
 from app import repo
 from app.services import cli_bridge
-
-
-def mcp_item_to_cli(item: dict[str, Any]) -> dict[str, Any]:
-    """원시 MCP show_generations 아이템 → cli_bridge.parse_job 이 먹는 CLI list 형태.
-
-    MCP:  {id, status, model, params{prompt, medias|input_images}, results{rawUrl}, createdAt}
-    CLI : {id, status, job_set_type, result_url, created_at, params}
-    """
-    params = dict(item.get("params") or {})
-
-    # 결과물 URL — results.rawUrl(객체) 또는 배열 첫 원소.
-    results = item.get("results") or {}
-    raw_url = None
-    if isinstance(results, dict):
-        raw_url = results.get("rawUrl") or results.get("url") or results.get("minUrl")
-    elif isinstance(results, list) and results:
-        r0 = results[0] or {}
-        raw_url = r0.get("rawUrl") or r0.get("url")
-
-    # 레퍼런스 — medias 가 있으면 그대로, 없고 input_images 만 있으면 medias 형태로 합성.
-    # (과거 항목은 100-window 밖이라 CLI 동기화가 안 닿음 → 이 백필이 유일한 레퍼런스 소스.
-    #  레퍼런스는 insert-once 라 한 번만 들어가면 됨.)
-    if not params.get("medias") and params.get("input_images"):
-        params["medias"] = [
-            {
-                "role": img.get("role") or "image",
-                "data": {
-                    "id": img.get("id"),
-                    "url": img.get("url"),
-                    "type": img.get("type"),
-                },
-            }
-            for img in params.get("input_images") or []
-            if isinstance(img, dict) and img.get("url")
-        ]
-
-    return {
-        "id": item.get("id"),
-        "status": item.get("status"),
-        "job_set_type": item.get("model"),
-        "display_name": item.get("model"),
-        "result_url": raw_url,
-        "created_at": item.get("createdAt"),
-        "params": params,
-    }
+from app.services.mcp_ingest import mcp_item_to_cli  # 공유 매핑(routers/ingest.py 의 /ingest/mcp 와 동일)
 
 
 def _looks_like_bundle_item(x: Any) -> bool:

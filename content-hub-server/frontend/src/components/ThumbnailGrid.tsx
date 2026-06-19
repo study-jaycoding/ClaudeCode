@@ -3,7 +3,8 @@
 //  · 빈 공간 드래그 = 마퀴(러버밴드) 다중 선택
 //  · 더블클릭 = 미리보기. (카드 드래그는 프롬프트 재사용 — 마퀴 대신 네이티브 드래그)
 // 선택 상태는 App 이 Set<string>(id) 로 보유 — 일괄 작업/select-bar 가 의존.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useT } from "../lib/i18n";
 import type { Generation, InfoTarget, PreviewTarget } from "../types";
 import { GenerationCard } from "./GenerationCard";
 
@@ -13,6 +14,7 @@ interface Props {
   scale: number; // 카드 크기 배율 (그리드 모드)
   fill: boolean; // 썸네일 cover(꽉) ↔ contain(비율)
   layout: "grid" | "list";
+  groupByDate: boolean; // 그리드에서 힉스필드 날짜별 섹션 구분
   selectedIds: Set<string>;
   onSelectedChange: (next: Set<string>) => void; // 마퀴/클릭 선택 결과(전체 치환)
   onToggleSelect: (id: string) => void; // 리스트 모드 체크박스
@@ -22,37 +24,95 @@ interface Props {
   onRegenerate: (g: Generation) => void;
   onPublish: (g: Generation) => void;
   onUnpublish: (g: Generation) => void;
+  onFinalize: (g: Generation) => void; // v02 CMS: Supervisor 최종(골드) 지정
+  onUnfinalize: (g: Generation) => void; // 최종 해제
+  canFinalize?: (g: Generation) => boolean; // 그 프로젝트 supervisor/PM 일 때만 최종 지정 가능(없으면 허용)
   onImport: (g: Generation) => void;
+  onRestore: (g: Generation) => void; // 휴지통 복구
+  dimDeleted: boolean; // 지운 카드 흐림 적용('함께 보기'만 true, '지운 것만'은 false)
   onColor: (g: Generation, color: string | null) => void;
   onTags: (g: Generation) => void;
   onInfo: (t: InfoTarget) => void;
   onPreview: (t: PreviewTarget) => void;
+  onShowHistory?: (g: Generation) => void; // 히스토리 뱃지 → 가계 패널
+  // 무한 스크롤 — 로드된 DOM 을 다 보여준 뒤 바닥에 닿으면 서버 다음 페이지 요청.
+  hasMore?: boolean; // 서버에 더 받을 페이지가 있나
+  loadingMore?: boolean;
+  onLoadMore?: () => void;
+}
+
+// created_at(UTC, "YYYY-MM-DD HH:MM:SS") → 로컬 날짜 그룹 키 + 표시 라벨("June 11, 2026").
+function dayInfo(iso: string): { key: string; label: string } {
+  const d = new Date(iso.replace(" ", "T") + "Z");
+  if (isNaN(d.getTime())) return { key: iso.slice(0, 10), label: iso.slice(0, 10) };
+  const key = `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+  const label = d.toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+  return { key, label };
 }
 
 export function ThumbnailGrid(props: Props) {
-  const { generations, scale, layout, selectedIds, onSelectedChange } = props;
+  const { generations, scale, layout, groupByDate, selectedIds, onSelectedChange } = props;
   const isList = layout === "list";
+  const t = useT();
+
+  // 날짜별 그룹(전체 기준) — 헤더 체크박스가 화면에 안 뜬 항목까지 포함해 그 날짜 전체를 선택.
+  const dateGroups = useMemo(() => {
+    const m = new Map<string, { label: string; ids: string[] }>();
+    for (const g of generations) {
+      const { key, label } = dayInfo(g.created_at);
+      let e = m.get(key);
+      if (!e) {
+        e = { label, ids: [] };
+        m.set(key, e);
+      }
+      e.ids.push(g.id);
+    }
+    return m;
+  }, [generations]);
+
+  // 날짜 헤더 체크박스 — 그 날짜의 모든 항목을 한 번에 선택/해제(토글).
+  const toggleDate = (ids: string[], allSelected: boolean) => {
+    const n = new Set(selectedIds);
+    if (allSelected) ids.forEach((id) => n.delete(id));
+    else ids.forEach((id) => n.add(id));
+    onSelectedChange(n);
+  };
 
   const gridRef = useRef<HTMLDivElement>(null);
-  // 점진 렌더(무한스크롤) — 데이터는 전부 로드하되 DOM 은 보이는 만큼만. 클라이언트 필터와 호환.
+  // 점진 렌더 — 로드된 데이터(generations)를 DOM 에는 보이는 만큼만. 바닥에서 더 보여줄 게
+  // 없으면 서버 다음 페이지를 요청(onLoadMore) → 무한 스크롤이 클라이언트·서버 양쪽으로 작동.
   const PAGE = 60;
   const [shown, setShown] = useState(120);
   const sentinelRef = useRef<HTMLDivElement>(null);
+  const moreToShow = shown < generations.length; // 로드된 것 중 아직 안 그린 게 있나
+  const showSentinel = moreToShow || !!props.hasMore;
+  // ref 로 최신 값을 봐서 IO 콜백을 안정 참조로 유지
+  const loadMoreRef = useRef<() => void>(() => {});
+  loadMoreRef.current = () => {
+    if (shown < generations.length) {
+      setShown((s) => Math.min(generations.length, s + PAGE)); // DOM 더 노출
+    } else if (props.hasMore && !props.loadingMore) {
+      props.onLoadMore?.(); // 서버 다음 페이지
+    }
+  };
   useEffect(() => {
     const el = sentinelRef.current;
-    if (!el || shown >= generations.length) return; // 더 없으면 관찰 안 함
+    if (!el || !showSentinel) return;
     const io = new IntersectionObserver(
       (entries) => {
-        if (entries[0].isIntersecting)
-          setShown((s) => Math.min(generations.length, s + PAGE));
+        if (entries[0].isIntersecting) loadMoreRef.current();
       },
       { rootMargin: "800px" }, // 바닥 닿기 전에 미리 로드
     );
     io.observe(el);
     return () => io.disconnect();
-  }, [shown, generations.length]);
+  }, [showSentinel, shown, generations.length, props.hasMore, props.loadingMore]);
   const visible = generations.slice(0, shown);
-  const hasMore = shown < generations.length;
+  const hasMore = showSentinel; // 센티넬·진행표시 렌더 조건(아래에서 사용)
 
   const [marquee, setMarquee] = useState<{ l: number; t: number; w: number; h: number } | null>(null);
   const [focusIdx, setFocusIdx] = useState(-1); // 방향키 네비 앵커(그리드 포커스 시)
@@ -161,16 +221,11 @@ export function ThumbnailGrid(props: Props) {
     // 카드 인라인 입력 중엔 무시(타이핑이 그리드 네비/단축키로 새지 않게).
     if ((e.target as HTMLElement).tagName === "INPUT") return;
     if (!generations.length) return;
-    // s/#/c — 포커스 카드에서 인라인 편집(에셋 파트와 동일). 수식키 없을 때만.
+    // #/c — 포커스 카드에서 인라인 편집·코멘트(에셋 파트와 동일). 수식키 없을 때만.
+    // s 는 생성탭에선 비활성(공유는 카드 S 클릭/오버레이/선택바로만 — 키보드로 공유 안 됨).
     if (!e.ctrlKey && !e.metaKey && !e.altKey) {
       const fgen = generations[focusIdx];
       if (fgen) {
-        if (e.key === "s" || e.key === "S") {
-          e.preventDefault();
-          if (fgen.is_source) props.onSetSource(fgen, null, false);
-          else setEditTarget({ id: fgen.id, field: "source" });
-          return;
-        }
         if (e.key === "#") {
           e.preventDefault();
           setEditTarget({ id: fgen.id, field: "tag" });
@@ -229,7 +284,24 @@ export function ThumbnailGrid(props: Props) {
 
   const onPreviewCell = (g: Generation) => {
     const a = g.assets[0];
-    if (a) props.onPreview({ url: a.file_path, type: a.type, name: g.prompt.slice(0, 50) || "(제목 없음)" });
+    if (!a) return;
+    // 같은 그리드의 미디어 목록을 함께 넘겨 풀스크린에서 ←/→ 로 이전·다음 이동.
+    const withAsset = generations.filter((x) => x.assets[0]);
+    const items = withAsset.map((x) => ({
+      url: x.assets[0].file_path,
+      type: x.assets[0].type,
+      name: x.prompt.slice(0, 50) || "(제목 없음)",
+      genId: x.id,
+    }));
+    const index = withAsset.findIndex((x) => x.id === g.id);
+    props.onPreview({
+      url: a.file_path,
+      type: a.type,
+      name: g.prompt.slice(0, 50) || "(제목 없음)",
+      genId: g.id,
+      items,
+      index,
+    });
   };
 
   const onGridMouseDown = (e: React.MouseEvent) => {
@@ -272,8 +344,7 @@ export function ThumbnailGrid(props: Props) {
     return (
       <div className="grid-wrap">
         <div className="empty">
-          항목이 없습니다. 우측 상단 <b>동기화</b>로 기존 생성 이력을 불러오거나{" "}
-          <b>+ 새 생성</b>으로 시작하세요.
+          {t("항목이 없습니다.")} <b>{t("+ 새 생성")}</b>
         </div>
       </div>
     );
@@ -323,24 +394,51 @@ export function ThumbnailGrid(props: Props) {
         onDragStart={onGridDragStart}
         onKeyDown={onGridKeyDown}
       >
-        {visible.map((g, i) => (
-          <div
-            className={"gen-cell" + (i === focusIdx ? " focused" : "")}
-            data-id={g.id}
-            data-idx={i}
-            key={g.id}
-          >
-            <GenerationCard
-              {...props}
-              gen={g}
-              layout="grid"
-              selected={selectedIds.has(g.id)}
-              editingField={editTarget?.id === g.id ? editTarget.field : null}
-              onRequestEdit={requestEdit}
-              onEditDone={editDone}
-            />
-          </div>
-        ))}
+        {(() => {
+          const out: React.ReactNode[] = [];
+          let lastDay: string | null = null;
+          visible.forEach((g, i) => {
+            if (groupByDate) {
+              const { key, label } = dayInfo(g.created_at);
+              if (key !== lastDay) {
+                lastDay = key;
+                const grp = dateGroups.get(key);
+                const ids = grp?.ids ?? [];
+                const allSel = ids.length > 0 && ids.every((id) => selectedIds.has(id));
+                out.push(
+                  <label className="gen-date-header" key={"h-" + key}>
+                    <input
+                      type="checkbox"
+                      checked={allSel}
+                      onChange={() => toggleDate(ids, allSel)}
+                    />
+                    <span className="gen-date-label">{label}</span>
+                    <span className="gen-date-count">{ids.length}</span>
+                  </label>,
+                );
+              }
+            }
+            out.push(
+              <div
+                className={"gen-cell" + (i === focusIdx ? " focused" : "")}
+                data-id={g.id}
+                data-idx={i}
+                key={g.id}
+              >
+                <GenerationCard
+                  {...props}
+                  gen={g}
+                  layout="grid"
+                  selected={selectedIds.has(g.id)}
+                  editingField={editTarget?.id === g.id ? editTarget.field : null}
+                  onRequestEdit={requestEdit}
+                  onEditDone={editDone}
+                />
+              </div>,
+            );
+          });
+          return out;
+        })()}
         {hasMore && (
           <div ref={sentinelRef} className="grid-sentinel">
             더 불러오는 중… ({visible.length}/{generations.length})

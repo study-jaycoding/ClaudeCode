@@ -106,87 +106,350 @@ def backfill_creator_uids() -> int:
     return n
 
 
-def list_creators() -> list[dict[str, Any]]:
-    """생성자 목록 [{uid, name, count, is_mine}] — 사이드바 필터 + 이름붙이기."""
-    my = get_my_uid()
+def list_creators(
+    account_uid: Optional[str] = None, tab: str = "my", project_id: Optional[str] = None
+) -> list[dict[str, Any]]:
+    """생성자 목록 [{uid, name, count, is_mine}] — 사이드바 필터 + 이름붙이기.
+
+    그리드 목록과 같은 범위를 세도록 탭·계정으로 한정한다(예전엔 전체를 세서 '내 작업' 탭에도
+    남의 카운트가 떴다):
+      · project_id → 그 프로젝트에 **참여한 인원(멤버) 전부**. 클릭 시 팀공유 탭에서 그 사람으로 필터.
+        count 는 그 프로젝트에서 그 멤버의 생성물(tab='team'이면 공유된 것)만 센다.
+      · tab='my' + account_uid → 로그인 계정 본인 것만(보통 1명 → 사이드바가 자동 숨김).
+      · tab='team' → 공유된 결과물의 작성자들.
+      · account_uid 없음(비로그인/단독) → 전체(기존 동작 유지)."""
+    my = account_uid or get_my_uid()
+    if project_id:
+        # 프로젝트 참여 인원(배정된 멤버 전부) — 이름은 creator→account→로컬파트 폴백(uid 노출 금지).
+        share_cond = (
+            " AND EXISTS (SELECT 1 FROM share s WHERE s.generation_id = g.id)"
+            if tab == "team"
+            else ""
+        )
+        with get_connection() as conn:
+            rows = conn.execute(
+                "SELECT m.creator_uid uid, "
+                "(SELECT COUNT(*) FROM generation g WHERE g.project_id=? "
+                f"AND g.creator_uid=m.creator_uid AND g.deleted_at IS NULL{share_cond}) cnt "
+                "FROM project_member m WHERE m.project_id = ? ORDER BY cnt DESC",
+                (project_id, project_id),
+            ).fetchall()
+            names = resolve_display_names(conn, [r["uid"] for r in rows])
+            return [
+                {
+                    "uid": r["uid"],
+                    "name": names.get(r["uid"]),
+                    "count": r["cnt"],
+                    "is_mine": r["uid"] == my,
+                }
+                for r in rows
+            ]
+    where = ["g.creator_uid IS NOT NULL", "g.deleted_at IS NULL"]
+    args: list[Any] = []
+    if tab == "team":
+        where.append("EXISTS (SELECT 1 FROM share s WHERE s.generation_id = g.id)")
+    elif account_uid:
+        where.append("g.creator_uid = ?")
+        args.append(account_uid)
     with get_connection() as conn:
         rows = conn.execute(
-            "SELECT g.creator_uid uid, COUNT(*) cnt, c.name name "
-            "FROM generation g LEFT JOIN creator c ON c.uid=g.creator_uid "
-            "WHERE g.creator_uid IS NOT NULL "
-            "GROUP BY g.creator_uid ORDER BY cnt DESC"
+            "SELECT g.creator_uid uid, COUNT(*) cnt "
+            "FROM generation g "
+            f"WHERE {' AND '.join(where)} "
+            "GROUP BY g.creator_uid ORDER BY cnt DESC",
+            args,
         ).fetchall()
-        return [
-            {"uid": r["uid"], "name": r["name"], "count": r["cnt"], "is_mine": r["uid"] == my}
+        # 표시이름은 creator.name 만이 아니라 account.name·이메일까지 폴백(해석기 통일) →
+        # 이름 미러 전인 계정도 사이드바에서 '팀원' 대신 제 이름으로 뜬다.
+        names = resolve_display_names(conn, [r["uid"] for r in rows])
+        result = [
+            {"uid": r["uid"], "name": names.get(r["uid"]), "count": r["cnt"], "is_mine": r["uid"] == my}
             for r in rows
         ]
+        # My Work 탭: 본인 생성물이 0개여도 '나'는 항상 보인다 — 다른 컴퓨터·새 계정에서도
+        # CREATOR 섹션이 사라지지 않게(프로젝트 경로가 멤버 전원을 늘 보여주는 것과 일관).
+        if account_uid and tab != "team" and not any(r["uid"] == account_uid for r in result):
+            sname = resolve_display_names(conn, [account_uid]).get(account_uid)
+            result.insert(
+                0, {"uid": account_uid, "name": sname, "count": 0, "is_mine": account_uid == my}
+            )
+        return result
 
 
-# ── 멤버 등급(C0~C5) — 로드맵 §4-3 ───────────────────────────────────────
-# C0=관리자(전부) / C1=프로젝트 관리자 / C2~C5=피관리(할당 프로젝트만, 외부권한 나중).
-# ⚠️ 현재는 '식별·표시'까지만 — 실제 접근 차단은 로그인 단계에서(식별 먼저, 차단 나중).
-ROLES = ("C0", "C1", "C2", "C3", "C4", "C5")
-_DEFAULT_ROLE = "C2"  # 미지정 멤버 기본 표시(피관리)
+def resolve_display_names(
+    conn: sqlite3.Connection, uids
+) -> dict[str, Optional[str]]:
+    """creator_uid → 표시이름. 폴백: creator.name → account.name → 이메일 로컬파트.
+
+    이 프로젝트의 **유일한** 작성자/멤버 이름 해석기 — 카드·사이드바·멤버·코멘트가 전부 이걸
+    쓴다(같은 규칙). 읽기 시점에 매번 해석하므로 표시이름을 바꾸면(set_account_name 이
+    creator.name·account.name 둘 다 갱신) 다른 사람 화면에도 즉시 전파된다.
+    UI 에는 절대 uid/이메일을 노출하지 않는다 — 이름이 없으면 None 을 돌려주고 호출측이 '팀원'으로 표기."""
+    ids = {u for u in uids if u}
+    if not ids:
+        return {}
+    ph = ",".join("?" * len(ids))
+    crow = {
+        r["uid"]: r["name"]
+        for r in conn.execute(
+            f"SELECT uid, name FROM creator WHERE uid IN ({ph})", list(ids)
+        ).fetchall()
+    }
+    arow = {
+        r["creator_uid"]: (r["name"], r["email"])
+        for r in conn.execute(
+            f"SELECT creator_uid, name, email FROM account WHERE creator_uid IN ({ph})",
+            list(ids),
+        ).fetchall()
+    }
+    out: dict[str, Optional[str]] = {}
+    for u in ids:
+        an, ae = arow.get(u, (None, None))
+        out[u] = (
+            (crow.get(u) or "").strip()
+            or (an or "").strip()
+            or _email_localpart(ae)
+            or None
+        )
+    return out
 
 
-def _effective_role(stored: Optional[str], is_mine: bool) -> str:
-    """저장된 등급이 있으면 그대로, 없으면 나(제공자)는 C0(관리자), 그 외는 기본 피관리."""
-    if stored in ROLES:
-        return stored
-    return "C0" if is_mine else _DEFAULT_ROLE
+# ── 멤버 전역 역할(복수) — v02 RBAC PART 1 ───────────────────────────────
+# 전역 4역할 admin/product_director/production_director/member 를 CSV 로 복수 보유 가능.
+# ⚠️ enforcement off 면 '식별·표시'까지만 — 실제 차단은 CONTENT_HUB_AUTH=1 일 때.
+
+
+def _effective_globals(stored: Optional[str], is_mine: bool) -> list[str]:
+    """전역 역할 리스트 — 저장값(CSV) 우선, 비어 있으면 나(제공자)=admin, 그 외 member."""
+    from .. import rbac
+
+    roles = rbac.parse_roles(stored)
+    if roles:
+        return roles
+    return [rbac.ADMIN] if is_mine else [rbac.MEMBER]
+
+
+def account_creator_uid(email: str, owner_email: Optional[str], my_uid: Optional[str]) -> str:
+    """한 계정(로그인 사용자)의 생성자 uid 를 결정 — 소유자(provider)면 힉스필드 my_creator_uid,
+    그 외는 이메일 앵커 합성 uid('acct:<email>'). 멱등·안정(이메일 불변)."""
+    email = (email or "").strip().lower()
+    if owner_email and email == (owner_email or "").strip().lower() and my_uid:
+        return my_uid
+    return "acct:" + email
+
+
+def link_accounts_to_creators() -> int:
+    """각 account 에 creator_uid 를 보장하고 creator 행 이름·역할을 account 기준으로 맞춘다(멱등).
+    이래야 신규 로그인 계정이 멤버 목록·프로젝트 배정 후보에 뜨고(생성물 0이어도),
+    카드 작성자 표기도 계정 이름을 따른다. 시작 시 + 가입 직후 호출."""
+    n = 0
+    with get_connection() as conn:
+        owner_email = get_setting("provider_email")
+        my_uid = get_setting("my_creator_uid")
+        rows = conn.execute(
+            "SELECT email, name, global_role, creator_uid FROM account"
+        ).fetchall()
+        for r in rows:
+            uid = r["creator_uid"] or account_creator_uid(r["email"], owner_email, my_uid)
+            if not r["creator_uid"]:
+                conn.execute(
+                    "UPDATE account SET creator_uid=? WHERE email=?", (uid, r["email"])
+                )
+                n += 1
+            # creator 행 보장 + 전역역할 미러. 계정에 연결된 creator 의 표시이름은 **계정 이름이
+            # 우선**(authoritative) — 계정은 허브 신원이고 사용자가 정한 이름이라, 과거 잘못 박힌
+            # 라벨(relink 사고로 남의 이름이 stick)을 시작 시 자동 교정한다. 계정명이 비면 기존 보존.
+            # (계정에 연결 안 된 동기화 카드 creator 는 이 루프 밖이라 자기 이름 그대로 유지.)
+            conn.execute(
+                "INSERT INTO creator(uid, name, global_role) VALUES(?,?,?) "
+                "ON CONFLICT(uid) DO UPDATE SET "
+                "name=COALESCE(excluded.name, creator.name), "
+                "global_role=COALESCE(excluded.global_role, creator.global_role)",
+                (uid, (r["name"] or "").strip() or None, r["global_role"] or None),
+            )
+    return n
+
+
+def set_account_hf_creator(email: str, uid: str) -> bool:
+    """push 시 계정을 '실제 힉스필드 생성자 uid'에 연결(합성 acct: uid 를 대체).
+    이래야 그 계정 '내 작업'이 자기 힉스필드 생성물(creator_uid=uid)로 채워진다.
+    이미 같은 실제 uid 면 그대로. creator 행 표시이름은 계정 이름 우선(authoritative)."""
+    email = (email or "").strip().lower()
+    uid = (uid or "").strip()
+    if not email or not uid:
+        return False
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT name, creator_uid FROM account WHERE email=?", (email,)
+        ).fetchone()
+        if not row:
+            return False
+        if row["creator_uid"] != uid:
+            conn.execute(
+                "UPDATE account SET creator_uid=? WHERE email=?", (uid, email)
+            )
+        conn.execute(
+            "INSERT INTO creator(uid, name) VALUES(?,?) "
+            "ON CONFLICT(uid) DO UPDATE SET name=COALESCE(excluded.name, creator.name)",
+            (uid, (row["name"] or "").strip() or None),
+        )
+    _MY_UID_CACHE[0] = None
+    return True
+
+
+def record_account_status(email: str, status: dict[str, Any]) -> None:
+    """push 에이전트가 함께 보고한 그 계정의 힉스필드 상태(크레딧·워크스페이스)를 보관.
+    생성정보엔 크레딧이 없으므로, 팀 전체/구성원별 크레딧 집계는 이 '마지막 보고값'으로 한다."""
+    import json as _json
+
+    email = (email or "").strip().lower()
+    if not email or not isinstance(status, dict):
+        return
+    set_setting(f"hf_status:{email}", _json.dumps(status, ensure_ascii=False))
+
+
+def get_reported_status(email: str) -> Optional[dict[str, Any]]:
+    """한 계정이 에이전트로 보고한 마지막 힉스필드 상태(크레딧·플랜·워크스페이스) — 계정 메뉴가
+    '내 것'을 표시할 때 쓴다. 보고 이력 없으면 None. (브라우저는 그 계정 CLI에 직접 접근 못 함)"""
+    import json as _json
+
+    email = (email or "").strip().lower()
+    raw = get_setting(f"hf_status:{email}")
+    if not raw:
+        return None
+    try:
+        d = _json.loads(raw)
+        return d if isinstance(d, dict) else None
+    except (ValueError, TypeError):
+        return None
+
+
+def list_account_statuses() -> dict[str, Any]:
+    """보관된 계정별 힉스필드 상태 {email: {credits,...}} — 크레딧 집계 뷰용."""
+    import json as _json
+
+    out: dict[str, Any] = {}
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT key, value FROM app_setting WHERE key LIKE 'hf_status:%'"
+        ).fetchall()
+    for r in rows:
+        email = r["key"].split("hf_status:", 1)[-1]
+        try:
+            out[email] = _json.loads(r["value"]) if r["value"] else None
+        except (ValueError, TypeError):
+            out[email] = None
+    return out
+
+
+def credit_summary() -> dict[str, Any]:
+    """팀 크레딧 집계 — 각 계정 에이전트가 push 때 보고한 마지막 account_status 기준.
+    생성정보엔 크레딧이 없으므로 이 '마지막 보고값'으로 전체 합계·구성원별을 만든다."""
+    statuses = list_account_statuses()  # {email: {credits, plan, ...}}
+    with get_connection() as conn:
+        names = {
+            r["email"]: r["name"]
+            for r in conn.execute("SELECT email, name FROM account").fetchall()
+        }
+    rows: list[dict[str, Any]] = []
+    total = 0.0
+    for email, st in statuses.items():
+        if not isinstance(st, dict):
+            continue
+        cr = st.get("credits")
+        try:
+            crv = float(cr) if cr is not None else None
+        except (TypeError, ValueError):
+            crv = None
+        if crv is not None:
+            total += crv
+        rows.append(
+            {
+                "email": email,
+                "name": (names.get(email) or "").strip() or _email_localpart(email),
+                "credits": crv,
+                "plan": st.get("plan"),
+            }
+        )
+    rows.sort(key=lambda r: -(r["credits"] or 0))
+    return {"total": round(total, 2), "accounts": rows}
 
 
 def list_members() -> list[dict[str, Any]]:
-    """멤버(=생성자) 목록 [{uid, name, role, is_mine, count, email}].
-    관리자 창용 — 생성물 있는 생성자 + '나'(생성물 없어도 항상 포함)."""
+    """멤버 목록 [{uid, name, global_roles, is_mine, count, email, status}].
+    관리자 창·프로젝트 배정 후보용. ① 모든 로그인 계정(생성물 0이어도 포함) +
+    ② 계정 없는 외부 생성자(가져온 작업의 작성자)도 표기 유지."""
     my = get_my_uid()
-    prov = get_provider()
+    link_accounts_to_creators()  # 계정↔creator 연결 보장(멱등) — 신규 계정 즉시 후보화
     with get_connection() as conn:
-        rows = conn.execute(
-            "SELECT g.creator_uid uid, COUNT(*) cnt, c.name name, c.role role "
+        counts = {
+            r["uid"]: r["cnt"]
+            for r in conn.execute(
+                "SELECT creator_uid uid, COUNT(*) cnt FROM generation "
+                "WHERE creator_uid IS NOT NULL GROUP BY creator_uid"
+            ).fetchall()
+        }
+        members: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        # ① 로그인 계정 = 멤버(권한·신원의 1차 출처). 숨긴 계정은 멤버·배정 후보에서 제외.
+        for a in conn.execute(
+            "SELECT email, name, status, global_role, creator_uid FROM account "
+            "WHERE COALESCE(hidden,0)=0 ORDER BY created_at"
+        ).fetchall():
+            uid = a["creator_uid"]
+            if not uid or uid in seen:
+                continue
+            seen.add(uid)
+            members.append(
+                {
+                    "uid": uid,
+                    "name": (a["name"] or "").strip() or _email_localpart(a["email"]),
+                    "global_roles": _effective_globals(a["global_role"], uid == my),
+                    "is_mine": uid == my,
+                    "count": counts.get(uid, 0),
+                    "email": a["email"],
+                    "status": a["status"],
+                }
+            )
+        # ② 계정 없는 외부 생성자(가져온 번들 작성자 등)도 목록 유지
+        for r in conn.execute(
+            "SELECT g.creator_uid uid, COUNT(*) cnt, c.name name, c.global_role grole "
             "FROM generation g LEFT JOIN creator c ON c.uid=g.creator_uid "
             "WHERE g.creator_uid IS NOT NULL "
-            "GROUP BY g.creator_uid ORDER BY cnt DESC"
-        ).fetchall()
-        members = [
-            {
-                "uid": r["uid"],
-                "name": r["name"],
-                "role": _effective_role(r["role"], r["uid"] == my),
-                "is_mine": r["uid"] == my,
-                "count": r["cnt"],
-                "email": prov.get("email") if r["uid"] == my else None,
-            }
-            for r in rows
-        ]
-        # '나'(my_creator_uid)가 생성물 0이라 목록에 없으면 합성 추가(항상 보이게)
-        if my and not any(m["uid"] == my for m in members):
-            row = conn.execute(
-                "SELECT name, role FROM creator WHERE uid=?", (my,)
-            ).fetchone()
-            members.insert(
-                0,
+            "GROUP BY g.creator_uid, c.name, c.global_role"
+        ).fetchall():
+            if r["uid"] in seen:
+                continue
+            seen.add(r["uid"])
+            members.append(
                 {
-                    "uid": my,
-                    "name": (row["name"] if row else None) or prov.get("name"),
-                    "role": _effective_role(row["role"] if row else None, True),
-                    "is_mine": True,
-                    "count": 0,
-                    "email": prov.get("email"),
-                },
+                    "uid": r["uid"],
+                    "name": r["name"],
+                    "global_roles": _effective_globals(r["grole"], r["uid"] == my),
+                    "is_mine": r["uid"] == my,
+                    "count": r["cnt"],
+                    "email": None,
+                    "status": None,
+                }
             )
+    # 생성물 많은 순 → 이름순(계정이 위로 오도록 count 동률이면 이름)
+    members.sort(key=lambda m: (-m["count"], (m["name"] or "").lower()))
     return members
 
 
-def set_member_role(uid: str, role: Optional[str]) -> None:
-    """멤버 등급 부여/변경(creator 행 upsert, 이름 보존). role=None 이면 미지정으로."""
-    if role is not None and role not in ROLES:
-        raise ValueError(f"잘못된 등급: {role} (허용: {', '.join(ROLES)})")
+def set_member_global_roles(uid: str, global_roles) -> None:
+    """멤버 전역 역할(복수) 부여 — 리스트/CSV → CSV 저장. 연결된 account 에도 미러."""
+    from .. import rbac
+
+    csv = rbac.roles_to_str(global_roles)
     with get_connection() as conn:
         conn.execute(
-            "INSERT INTO creator(uid, role) VALUES(?,?) "
-            "ON CONFLICT(uid) DO UPDATE SET role=excluded.role",
-            (uid, role),
+            "INSERT INTO creator(uid, global_role) VALUES(?,?) "
+            "ON CONFLICT(uid) DO UPDATE SET global_role=excluded.global_role",
+            (uid, csv),
+        )
+        conn.execute(
+            "UPDATE account SET global_role=? WHERE creator_uid=?", (csv or rbac.MEMBER, uid)
         )
 
 
@@ -242,7 +505,9 @@ def capture_provider_identity(email: Optional[str]) -> None:
 def get_provider() -> dict[str, Optional[str]]:
     """내 제공자 신원 {uid, name, email}. 공유 파일명·작성자 표기의 기준(불변 uid + 가변 이름)."""
     email = get_setting("provider_email")
-    uid = get_setting("provider_uid") or email or get_my_uid()
+    # uid 는 권위 소스(my_creator_uid)에서 우선 — 과거 relink 사고로 provider_uid 에 이메일이
+    # 잘못 박혀도 실제 힉스필드 uid 를 쓰게(계정 식별자 표기 정확).
+    uid = get_my_uid() or get_setting("provider_uid") or email
     name = get_setting("provider_name") or _email_localpart(email) or uid or "me"
     return {"uid": uid, "name": name, "email": email}
 

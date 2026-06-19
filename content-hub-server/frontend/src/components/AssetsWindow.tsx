@@ -12,7 +12,7 @@ export function AssetsWindow() {
   const [preview, setPreview] = useState<PreviewTarget | null>(null);
 
   useEffect(() => {
-    document.title = "Content Hub — Assets (구성)";
+    document.title = "Millionvolt Hub — Assets (구성)";
   }, []);
 
   return (

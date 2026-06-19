@@ -4,6 +4,7 @@ export interface ChipRef {
   role: string; // @Image1 / @Video …
   name: string; // 칩 표시 이름(@소스명)
   thumb: string; // 칩 썸네일 URL
+  source_gen_id?: string; // 이 @소스가 온 generation id → 히스토리 reference 엣지 기록(없으면 에셋/업로드)
 }
 
 // ── contentEditable DOM 헬퍼(React 밖에서 명령형으로 관리) ──

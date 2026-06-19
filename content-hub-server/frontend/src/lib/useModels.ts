@@ -14,7 +14,94 @@ export const ALLOWED: Record<"image" | "video", string[]> = {
   video: ["seedance_2_0"],
 };
 // 동적 옵션에서 제외(프롬프트·미디어·내부용)
-export const HIDDEN_PARAMS = new Set(["prompt", "medias", "input_images", "folder_id"]);
+//  · batch_size: "한 번에 N장"은 앱 레벨 count(1/4)로 일원화 → UI 에서 숨김(중복·곱셈 함정 제거).
+//    숨기면 init/카드복원/body 어디서도 안 실리고 CLI 기본값(1)로 처리된다(gpt_image_2 default=1).
+//    ※ 한 generation = asset 1개 파이프라인이라 batch_size>1 은 첫 장만 남고 나머지는 버려짐 — count 로만 N장.
+export const HIDDEN_PARAMS = new Set(["prompt", "medias", "input_images", "folder_id", "batch_size"]);
+
+// 기본값 오버라이드 — 모델 스키마 기본값 대신 우리가 쓸 기본값.
+//  · bitrate_mode: 힉스필드 네이티브 UI 와 동일하게 'high' 를 기본으로(검증결과 high 가 standard 와
+//    크레딧 동일 → 화질만 올라가는 '공짜' 개선). 해당 enum 에 그 값이 있을 때만 적용(타 모델 안전).
+//  · duration: 비디오 기본 길이를 4s 로(스키마/CLI 기본 5s 대신 — 최소·최저 크레딧). 현재 duration
+//    파라미터는 seedance_2_0(min 4s)만 가지며, enum 없는 수치라 그 모델에만 적용된다.
+export const DEFAULT_OVERRIDE: Record<string, string> = { bitrate_mode: "high", duration: "4" };
+
+// 파라미터의 '실효 기본값' — 오버라이드(enum 에 존재할 때) > 스키마 default > enum 첫값.
+export function effectiveDefault(p: {
+  name: string;
+  default?: unknown;
+  enum?: string[] | null;
+}): string | number | undefined {
+  const ov = DEFAULT_OVERRIDE[p.name];
+  if (ov != null && (!p.enum?.length || p.enum.includes(ov))) return ov;
+  if (p.default != null) return p.default as string | number;
+  if (p.enum?.length) return p.enum[0];
+  return undefined;
+}
+
+// ── 모델별 파라미터 조합 제약 ──────────────────────────────────────────────
+// CLI 스키마(model get)·비용(generate cost)이 *막지 않는* 비즈니스 규칙. 힉스필드 네이티브 UI 기준.
+//  예) seedance_2_0 Fast 모드는 1080p 미지원 — cost 는 에러 없이 720p 가격(17)으로 조용히
+//      다운그레이드되므로(=1080p 무효), 우리가 UI 에서 막아야 사용자가 헛 선택을 안 한다.
+//  규칙: whenParam==whenEquals 이면 param 의 허용값을 allow 로 제한. 동일 param 다중 규칙은 교집합.
+export type ParamConstraint = {
+  whenParam: string;
+  whenEquals: string;
+  param: string;
+  allow: string[];
+  note: string;
+};
+export const MODEL_CONSTRAINTS: Record<string, ParamConstraint[]> = {
+  seedance_2_0: [
+    {
+      whenParam: "mode",
+      whenEquals: "fast",
+      param: "resolution",
+      allow: ["480p", "720p"],
+      note: "Fast 모드는 1080p를 지원하지 않습니다 (최대 720p).",
+    },
+  ],
+  gpt_image_2: [
+    {
+      // CLI 검증: quality=low 면 1k/2k/4k 비용이 전부 1로 동일 → 해상도가 적용되지 않음(1k로 처리).
+      whenParam: "quality",
+      whenEquals: "low",
+      param: "resolution",
+      allow: ["1k"],
+      note: "Low 품질에서는 해상도가 적용되지 않습니다 (1k로 처리).",
+    },
+  ],
+};
+
+// 정수 파라미터의 허용 범위 — CLI 가 강제하지만 스키마(model get)엔 min/max 가 없는 것.
+//  (duration 은 슬라이더 전용 DURATION_RANGE 가 따로 처리 — 여기엔 두지 않는다.)
+//  현재 항목 없음(이전의 gpt_image_2.batch_size 는 UI 에서 숨김 처리되어 불필요). 범용 메커니즘은 유지.
+export const NUMERIC_RANGE: Record<string, Record<string, { min: number; max: number }>> = {};
+export function numericRange(
+  model: string,
+  name: string,
+): { min: number; max: number } | null {
+  return NUMERIC_RANGE[model]?.[name] || null;
+}
+
+// 현재 옵션값에서 활성화된 제약 → { param: { allow:Set<string>, note } }. 동일 param 은 교집합.
+export function activeConstraints(
+  model: string,
+  optionValues: Record<string, string | number>,
+): Record<string, { allow: Set<string>; note: string }> {
+  const out: Record<string, { allow: Set<string>; note: string }> = {};
+  for (const c of MODEL_CONSTRAINTS[model] || []) {
+    if (String(optionValues[c.whenParam] ?? "") !== c.whenEquals) continue;
+    const ex = out[c.param];
+    if (ex) {
+      ex.allow = new Set([...ex.allow].filter((v) => c.allow.includes(v)));
+      ex.note = ex.note ? ex.note + " " + c.note : c.note;
+    } else {
+      out[c.param] = { allow: new Set(c.allow), note: c.note };
+    }
+  }
+  return out;
+}
 
 export function useModels(onError: (msg: string) => void) {
   const [models, setModels] = useState<ModelInfo[]>([]);
@@ -66,8 +153,8 @@ export function useModels(onError: (msg: string) => void) {
       const init: Record<string, string | number> = {};
       for (const p of r.params) {
         if (HIDDEN_PARAMS.has(p.name)) continue;
-        if (p.default != null) init[p.name] = p.default as string | number;
-        else if (p.enum?.length) init[p.name] = p.enum[0];
+        const dv = effectiveDefault(p); // 오버라이드(bitrate=high 등) 반영
+        if (dv != null) init[p.name] = dv;
       }
       if (pendingOptsRef.current) {
         setOptionValues({ ...init, ...pendingOptsRef.current });
@@ -133,11 +220,42 @@ export function useModels(onError: (msg: string) => void) {
     };
   }, [model, optionValues]);
 
+  // 현재 옵션에서 활성화된 조합 제약(예: fast → resolution 480p/720p 만).
+  const constraints = activeConstraints(model, optionValues);
+
+  // 제약 자동 보정 — 제약으로 금지된 값이 현재 선택돼 있으면 허용값으로 스냅(enum 순서상 가장 높은 것).
+  //  예) resolution=1080p 인데 mode 를 fast 로 바꾸면 → 720p 로 자동 하향(헛 생성·오해 방지).
+  //  멱등(보정 후엔 유효 → 재실행해도 변화 없음)이라 루프 없음.
+  useEffect(() => {
+    let next: Record<string, string | number> | null = null;
+    // ① enum 조합 제약 → 금지값이면 허용값으로 스냅
+    for (const [pname, c] of Object.entries(constraints)) {
+      const cur = String(optionValues[pname] ?? "");
+      if (cur && !c.allow.has(cur)) {
+        const p = params.find((x) => x.name === pname);
+        const ordered = (p?.enum || []).filter((v) => c.allow.has(v));
+        const snap = ordered.length ? ordered[ordered.length - 1] : [...c.allow][0];
+        if (snap != null) (next ||= { ...optionValues })[pname] = snap;
+      }
+    }
+    // ② 정수 범위 제약 → 범위 밖이면 클램프(예: gpt_image_2 batch_size 1~4)
+    for (const [pname, rg] of Object.entries(NUMERIC_RANGE[model] || {})) {
+      const v = optionValues[pname];
+      if (v === undefined || v === "") continue;
+      const n = Number(v);
+      if (Number.isNaN(n)) continue;
+      const cl = Math.min(rg.max, Math.max(rg.min, n));
+      if (cl !== n) (next ||= { ...optionValues })[pname] = cl;
+    }
+    if (next) setOptionValues(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [model, optionValues, params]);
+
   const setOpt = (name: string, value: string | number) => {
     setOptionValues((prev) => ({ ...prev, [name]: value }));
     setOpenRef.current?.(null);
   };
 
-  return { models, type, setType, model, setModel, params, tunable, typeModels, modelName,
+  return { models, type, setType, model, setModel, params, tunable, constraints, typeModels, modelName,
            optionValues, setOptionValues, setOpt, cost, costLoading, pendingOptsRef, setOpenRef };
 }

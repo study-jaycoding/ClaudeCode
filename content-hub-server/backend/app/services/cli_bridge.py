@@ -140,6 +140,7 @@ _STATUS_MAP = {
     "running": "running",
     "processing": "running",
     "in_progress": "running",
+    "nsfw": "nsfw",  # 콘텐츠 차단(결과 없음) — 터미널 상태로 그대로 보존
 }
 
 _VIDEO_EXT = (".mp4", ".mov", ".webm", ".mkv", ".avi")
@@ -327,6 +328,19 @@ async def _param_args(model: str, params: Optional[dict[str, Any]]) -> list[str]
     return out
 
 
+# 비용은 (모델 + 옵션)에 대해 결정적(프롬프트·계정 무관) → 한 번 받은 값은 캐시해 CLI 재호출을
+# 없앤다. 옵션 토글로 오갈 때, 정보팝업으로 같은 설정의 생성물을 볼 때 즉시 응답(딜레이 제거).
+# 설정 조합 수는 적어 사실상 무한 증가 없음(안전상 소프트 캡).
+_COST_CACHE: dict[tuple, dict[str, int]] = {}
+_COST_CACHE_MAX = 1024
+
+
+def _cost_key(model: str, params: Optional[dict[str, Any]]) -> tuple:
+    # 값 타입(4 vs "4")이 달라도 같은 키가 되도록 문자열 정규화. 프롬프트는 비용 무관 → 제외.
+    items = tuple(sorted((str(k), str(v)) for k, v in (params or {}).items()))
+    return (model, items)
+
+
 async def estimate_cost(
     model: str,
     params: Optional[dict[str, Any]] = None,
@@ -334,19 +348,28 @@ async def estimate_cost(
     timeout: float = 120.0,
 ) -> dict[str, int]:
     """잡 생성 없이 크레딧만 추정 — generate cost <model> [--param value] --json.
-    레퍼런스(미디어)는 비용 추정에 불필요+업로드 비용 → 제외(PV 와 동일)."""
+    레퍼런스(미디어)는 비용 추정에 불필요+업로드 비용 → 제외(PV 와 동일).
+    동일 (모델·옵션) 결과는 캐시(CLI 재호출 없이 즉시) — 비용은 결정적이라 안전."""
+    key = _cost_key(model, params)
+    cached = _COST_CACHE.get(key)
+    if cached is not None:
+        return cached
     args: list[str] = ["generate", "cost", model, "--prompt", prompt or "preview"]
     args += await _param_args(model, params)
     data = await _run_json(*args, timeout=timeout)
     if not isinstance(data, dict):
-        return {"credits": 0}
+        return {"credits": 0}  # 비정상 응답은 캐시 안 함(다음에 재시도)
     credits = data.get("credits_exact")
     if credits is None:
         credits = data.get("credits", 0)
     try:
-        return {"credits": int(round(float(credits)))}
+        result = {"credits": int(round(float(credits)))}
     except (TypeError, ValueError):
-        return {"credits": 0}
+        return {"credits": 0}  # 파싱 실패도 캐시 안 함
+    if len(_COST_CACHE) >= _COST_CACHE_MAX:
+        _COST_CACHE.clear()  # 소프트 캡(드묾) — 단순 비움
+    _COST_CACHE[key] = result
+    return result
 
 
 async def get_account_status(timeout: float = 30.0) -> dict[str, Any]:

@@ -4,11 +4,13 @@
 //  · 좌측 폴더 트리는 유지. 셀 휠클릭=정보, 클릭=미리보기.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
+import { useT } from "../lib/i18n";
 import { makeStore } from "../lib/storage";
 import { useFloatingPanel } from "../lib/useFloatingPanel";
 import type { AssetComment, AssetMeta, AssetNode, InfoTarget, PreviewTarget } from "../types";
 import { AssetCell } from "./assets/AssetCell";
 import { FolderTree } from "./assets/FolderTree";
+import { MountManager } from "./assets/MountManager";
 import { setSingleFileDrag, setZipDrag } from "./assets/exportDrag";
 import { findFolder, flattenFiles } from "./assets/treeUtils";
 
@@ -32,7 +34,20 @@ function fmtWhen(s: string): string {
     minute: "2-digit",
   });
 }
-const ME = "me"; // 현재 작업자(DEFAULT_WORKER_ID). 내 코멘트 판별용
+// 파일 mtime(epoch 초) → 로컬 날짜 그룹 키 + 표시 라벨("June 11, 2026"). 생성탭과 동일 포맷.
+function dayInfoFromMtime(mtime?: number | null): { key: string; label: string } {
+  if (!mtime) return { key: "none", label: "날짜 없음" };
+  const d = new Date(mtime * 1000);
+  if (isNaN(d.getTime())) return { key: "none", label: "날짜 없음" };
+  const key = `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+  const label = d.toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+  return { key, label };
+}
+
 const ASSET_COLORS: Record<string, string> = {
   r: "#ff453a", // 선명한 빨강
   g: "#34c759", // 선명한 초록
@@ -45,6 +60,12 @@ interface Props {
 }
 
 export function AssetsView({ onInfo, onPreview }: Props) {
+  const t = useT();
+  // 내 신원(로그인 계정 creator_uid, 단독이면 'me') — 코멘트 '내 것' 판별용. 독립 창이라 자체 조회.
+  const [myId, setMyId] = useState("me");
+  useEffect(() => {
+    api.me().then((a) => setMyId(a?.creator_uid || "me")).catch(() => {});
+  }, []);
   const [projects, setProjects] = useState<string[]>([]);
   const [project, setProject] = useState<string>("");
   const [tree, setTree] = useState<AssetNode[]>([]);
@@ -82,6 +103,8 @@ export function AssetsView({ onInfo, onPreview }: Props) {
   const [layout, setLayout] = useState<"grid" | "list">(() =>
     LS.get("layout", "grid") === "list" ? "list" : "grid",
   );
+  // 그리드에서 파일 날짜별로 구분(섹션 헤더) — 그리드 버튼을 한 번 더 누르면 토글
+  const [groupByDate, setGroupByDate] = useState(() => LS.get("groupByDate", "0") === "1");
   // 그리드 썸네일 맞춤: cover=꽉 채움(크롭) / contain=전체 보임(블랙바)
   const [fit, setFit] = useState<"cover" | "contain">(() =>
     LS.get("fit", "cover") === "contain" ? "contain" : "cover",
@@ -143,16 +166,27 @@ export function AssetsView({ onInfo, onPreview }: Props) {
     panelRef: cmtPanelRef,
   } = useFloatingPanel(LS, "cmtPos", "cmtSize", !!commentPath);
 
-  useEffect(() => {
+  // 등록 폴더(마운트) 관리 창
+  const [mountOpen, setMountOpen] = useState(false);
+
+  // 프로젝트(폴더 + 등록된 마운트) 목록 로드 — 마운트 등록/해제 후에도 재호출.
+  const reloadProjects = useCallback((keepCurrent = false) => {
     api
       .assetProjects()
       .then((info) => {
         setProjects(info.projects);
-        const saved = LS.get("project", "");
-        setProject(saved && info.projects.includes(saved) ? saved : info.default);
+        setProject((cur) => {
+          if (keepCurrent && cur && info.projects.includes(cur)) return cur;
+          const saved = LS.get("project", "");
+          return saved && info.projects.includes(saved) ? saved : info.default;
+        });
       })
       .catch((e) => setError(String(e)));
   }, []);
+
+  useEffect(() => {
+    reloadProjects();
+  }, [reloadProjects]);
 
   // 프로젝트별 파일 메타데이터 로드
   useEffect(() => {
@@ -200,6 +234,7 @@ export function AssetsView({ onInfo, onPreview }: Props) {
   }, [expanded]);
   useEffect(() => LS.set("scale", String(scale)), [scale]);
   useEffect(() => LS.set("layout", layout), [layout]);
+  useEffect(() => LS.set("groupByDate", groupByDate ? "1" : "0"), [groupByDate]);
   useEffect(() => LS.set("fit", fit), [fit]);
   // 검색/필터도 저장 → 보던 화면 그대로 복원
   useEffect(() => LS.set("query", query), [query]);
@@ -219,13 +254,14 @@ export function AssetsView({ onInfo, onPreview }: Props) {
     }, 150);
   }, [scrollKey]);
 
-  const anyFilter =
+  // 검색·메타 필터(프로젝트 전체 대상). 타입(이미지/영상/오디오)은 여기 포함하지 않는다 —
+  // 타입은 폴더 브라우징과 결합하는 '모드'라 폴더 선택을 유지한 채 후처리로만 거른다.
+  const searchActive =
     query.trim().length > 0 ||
     activeColors.size > 0 ||
     sourceOnly ||
     commentOnly ||
-    activeTags.size > 0 ||
-    !!typeFilter;
+    activeTags.size > 0;
 
   // 새(미확인) 코멘트가 있는 파일이 하나라도 있나 → C 버튼 자동 알림.
   const hasAnyUnread = useMemo(
@@ -245,8 +281,8 @@ export function AssetsView({ onInfo, onPreview }: Props) {
   const files = useMemo(() => {
     const q = query.trim();
     let result: AssetNode[];
-    if (anyFilter) {
-      // 검색·필터는 프로젝트 전체 대상
+    if (searchActive) {
+      // 검색·메타 필터는 프로젝트 전체 대상
       result = flattenFiles(tree);
       if (q.startsWith("#")) {
         const tag = q.slice(1).toLowerCase();
@@ -270,14 +306,33 @@ export function AssetsView({ onInfo, onPreview }: Props) {
         result = result.filter((f) =>
           (meta[f.path]?.tags || []).some((t) => activeTags.has(t)),
         );
-      if (typeFilter) result = result.filter((f) => f.type === typeFilter);
     } else {
       // 폴더 클릭 → 그 폴더 안의 모든 파일(하위 폴더 포함, 재귀)
       const children = dir ? findFolder(tree, dir) : tree;
       result = flattenFiles(children);
     }
+    // 타입 모드(이미지/영상/오디오)는 폴더·검색 결과 위에 결합 — 그 타입만 남긴다.
+    if (typeFilter) result = result.filter((f) => f.type === typeFilter);
+    // 날짜별 구분 모드: 폴더 순(알파벳) 대신 파일 날짜 내림차순으로 정렬 → 같은 날짜가 연속.
+    if (groupByDate)
+      result = [...result].sort((a, b) => (b.mtime ?? 0) - (a.mtime ?? 0));
     return result;
-  }, [tree, dir, query, meta, anyFilter, activeColors, sourceOnly, commentOnly, activeTags, typeFilter]);
+  }, [tree, dir, query, meta, searchActive, activeColors, sourceOnly, commentOnly, activeTags, typeFilter, groupByDate]);
+
+  // 날짜별 그룹(인덱스 기준) — 헤더 체크박스가 그 날짜의 모든 파일을 한 번에 선택.
+  const dateGroups = useMemo(() => {
+    const m = new Map<string, { label: string; idxs: number[] }>();
+    files.forEach((f, i) => {
+      const { key, label } = dayInfoFromMtime(f.mtime);
+      let e = m.get(key);
+      if (!e) {
+        e = { label, idxs: [] };
+        m.set(key, e);
+      }
+      e.idxs.push(i);
+    });
+    return m;
+  }, [files]);
 
   // 콘텐츠가 렌더된 뒤 보던 스크롤 위치 복원(같은 폴더/레이아웃/검색일 때만). 고정 높이라 이미지 로드 무관.
   // files.length 에만 의존 → 태그/소스/컬러 등 메타 편집(개수 불변)으로는 스크롤이 튀지 않음.
@@ -331,11 +386,11 @@ export function AssetsView({ onInfo, onPreview }: Props) {
   const filesRef = useRef(files);
   filesRef.current = files;
 
-  // 폴더/프로젝트/검색/필터 바뀌면 선택 초기화
+  // 폴더/프로젝트/검색/필터 바뀌면 선택 초기화(날짜 그룹 토글도 정렬이 바뀌므로 포함)
   useEffect(() => {
     setSelected(new Set());
     setFocusIdx(-1);
-  }, [dir, project, query, activeColors, sourceOnly, commentOnly, activeTags, typeFilter]);
+  }, [dir, project, query, activeColors, sourceOnly, commentOnly, activeTags, typeFilter, groupByDate]);
 
   const onDragMove = useCallback((e: MouseEvent) => {
     const d = dragRef.current;
@@ -387,6 +442,8 @@ export function AssetsView({ onInfo, onPreview }: Props) {
           setSelected(new Set([d.cellIdx]));
         }
       } else if (!d.additive) {
+        // 빈 공간 클릭 → 선택 + 포커스 링 모두 해제(생성탭과 동일)
+        setFocusIdx(-1);
         setSelected(new Set());
       }
     }
@@ -482,7 +539,8 @@ export function AssetsView({ onInfo, onPreview }: Props) {
       return;
     }
     if (e.button !== 0) return;
-    if ((e.target as HTMLElement).closest("button")) return; // 오버레이 버튼 제외
+    // 오버레이 버튼·날짜 헤더(label/체크박스) 위에서는 마퀴 시작 안 함
+    if ((e.target as HTMLElement).closest("button, label, input")) return;
     gridRef.current?.focus();
     const cellEl = (e.target as HTMLElement).closest(".asset-cell") as HTMLElement | null;
     const cellIdx = cellEl ? Number(cellEl.dataset.idx) : -1;
@@ -511,7 +569,15 @@ export function AssetsView({ onInfo, onPreview }: Props) {
     (f: AssetNode) => {
       // 오디오는 미리보기 창이 없음(호버 재생만) — 더블클릭/Enter 시 무시
       if (f.type !== "image" && f.type !== "video") return;
-      onPreview({ url: api.assetFileUrl(project, f.path), type: f.type, name: f.name });
+      // 현재 목록의 이미지·영상만 모아 함께 넘긴다 → 풀스크린에서 ←/→ 로 이전·다음 이동(생성 파트와 동일).
+      const media = filesRef.current.filter((x) => x.type === "image" || x.type === "video");
+      const items = media.map((x) => ({
+        url: api.assetFileUrl(project, x.path),
+        type: x.type as "image" | "video",
+        name: x.name,
+      }));
+      const index = media.findIndex((x) => x.path === f.path);
+      onPreview({ url: api.assetFileUrl(project, f.path), type: f.type, name: f.name, items, index });
     },
     [project, onPreview],
   );
@@ -824,10 +890,6 @@ export function AssetsView({ onInfo, onPreview }: Props) {
     (p: string, tags: string[]) => cellOpsRef.current.commitTags(p, tags),
     [],
   );
-  const cellOnTagRemove = useCallback(
-    (p: string, t: string) => cellOpsRef.current.removeAssetTag(p, t),
-    [],
-  );
   const cellOnTagCancel = useCallback(() => setTagEditPath(null), []);
 
   // 그리드/리스트가 공유하는 셀 목록(중복 제거). layout 한 값으로 둘 중 하나만 렌더된다.
@@ -848,7 +910,6 @@ export function AssetsView({ onInfo, onPreview }: Props) {
       onC={cellOnC}
       onTagCommit={cellOnTagCommit}
       onTagCancel={cellOnTagCancel}
-      onTagRemove={cellOnTagRemove}
       onInfo={onInfo}
       onExportDrag={exportDrag}
     />
@@ -859,6 +920,43 @@ export function AssetsView({ onInfo, onPreview }: Props) {
       style={{ left: marquee.l, top: marquee.t, width: marquee.w, height: marquee.h }}
     />
   );
+
+  // 날짜 헤더 체크박스 — 그 날짜의 모든 파일(인덱스)을 한 번에 선택/해제.
+  const toggleDate = (idxs: number[], allSel: boolean) =>
+    setSelected((prev) => {
+      const n = new Set(prev);
+      if (allSel) idxs.forEach((i) => n.delete(i));
+      else idxs.forEach((i) => n.add(i));
+      return n;
+    });
+
+  // 그리드용: 날짜 구분 모드면 날짜가 바뀔 때마다 섹션 헤더를 끼워넣는다(아니면 셀 그대로).
+  const buildGridCells = (): React.ReactNode[] => {
+    if (!groupByDate) return cellEls;
+    const out: React.ReactNode[] = [];
+    let lastDay: string | null = null;
+    files.forEach((f, i) => {
+      const { key, label } = dayInfoFromMtime(f.mtime);
+      if (key !== lastDay) {
+        lastDay = key;
+        const idxs = dateGroups.get(key)?.idxs ?? [];
+        const allSel = idxs.length > 0 && idxs.every((x) => selected.has(x));
+        out.push(
+          <label className="gen-date-header" key={"h-" + key}>
+            <input
+              type="checkbox"
+              checked={allSel}
+              onChange={() => toggleDate(idxs, allSel)}
+            />
+            <span className="gen-date-label">{label}</span>
+            <span className="gen-date-count">{idxs.length}</span>
+          </label>,
+        );
+      }
+      out.push(cellEls[i]);
+    });
+    return out;
+  };
 
   // 한 루트의 모든 하위 답글을 평탄화(시간순) — 들여쓰기는 1단계로 고정.
   const descendantsOf = (rootId: string): AssetComment[] => {
@@ -877,12 +975,12 @@ export function AssetsView({ onInfo, onPreview }: Props) {
 
   // 코멘트 한 줄. 내 코멘트는 수정/삭제(단 남이 답글 달면 잠김). isReply 면 1단 들여쓰기.
   const renderRow = (c: AssetComment, isReply: boolean, replyToName: string | null) => {
-    const mine = c.author === ME;
-    const lockedByReply = (cmtByParent[c.id] || []).some((ch) => ch.author !== ME);
+    const mine = c.author === myId;
+    const lockedByReply = (cmtByParent[c.id] || []).some((ch) => ch.author !== myId);
     return (
       <div key={c.id} className={"cmt-item" + (isReply ? " reply" : "")}>
         <div className="cmt-meta">
-          <span className="cmt-author">{c.author_name || c.author}</span>
+          <span className="cmt-author">{c.author_name || "팀원"}</span>
           {replyToName && <span className="cmt-replyto">↳ {replyToName}</span>}
           <span className="cmt-when">{fmtWhen(c.created_at)}</span>
           <div className="cmt-acts">
@@ -940,7 +1038,7 @@ export function AssetsView({ onInfo, onPreview }: Props) {
       {descendantsOf(root.id).map((d) => {
         const parent = d.parent_id ? cmtById[d.parent_id] : undefined;
         const toName =
-          parent && d.parent_id !== root.id ? `${parent.author_name || parent.author}` : null;
+          parent && d.parent_id !== root.id ? `${parent.author_name || "팀원"}` : null;
         return renderRow(d, true, toName);
       })}
     </div>
@@ -949,9 +1047,13 @@ export function AssetsView({ onInfo, onPreview }: Props) {
   return (
     <div className="assets-view">
       <div className="assets-view-head">
-        <span className="assets-title">
+        <button
+          className="assets-title"
+          title={t("폴더 등록")}
+          onClick={() => setMountOpen(true)}
+        >
           <span className="assets-thumb sm" /> Assets
-        </span>
+        </button>
         <select
           className="assets-project"
           value={project}
@@ -966,8 +1068,15 @@ export function AssetsView({ onInfo, onPreview }: Props) {
             </option>
           ))}
         </select>
-        <span className="muted">프로젝트 라이브러리</span>
+        <span className="muted">{t("MV 라이브러리")}</span>
       </div>
+
+      {mountOpen && (
+        <MountManager
+          onClose={() => setMountOpen(false)}
+          onChanged={() => reloadProjects(true)}
+        />
+      )}
 
       <div className="assets-body">
         <aside className="assets-tree">
@@ -984,8 +1093,19 @@ export function AssetsView({ onInfo, onPreview }: Props) {
               </button>
             )}
           </div>
-          {/* 타입별 필터(이미지/영상/오디오) — 토글식 */}
+          {/* 타입별 필터(전체/이미지/영상/오디오) — 토글식 */}
           <div className="type-filter">
+            {/* All — 타입 필터 해제(모든 미디어). 폴더·검색은 그대로 유지 */}
+            <div
+              className={"type-row type-all" + (!typeFilter ? " active" : "")}
+              onClick={() => setTypeFilter(null)}
+            >
+              <span className="type-icon">▦</span>
+              <span className="type-label">All</span>
+              <span className="type-count">
+                {typeCounts.image + typeCounts.video + typeCounts.audio || "-"}
+              </span>
+            </div>
             {(
               [
                 ["image", "🖼", "Image"],
@@ -1002,7 +1122,7 @@ export function AssetsView({ onInfo, onPreview }: Props) {
                 }
                 onClick={() => {
                   if (typeCounts[t] === 0) return; // 없는 타입은 필터 불가
-                  setQuery("");
+                  // 폴더·검색을 유지한 채 타입만 토글 → 현재 폴더에서 그 타입만 검색
                   setTypeFilter((cur) => (cur === t ? null : t));
                 }}
               >
@@ -1013,10 +1133,9 @@ export function AssetsView({ onInfo, onPreview }: Props) {
             ))}
           </div>
           <div
-            className={"tree-row root" + (dir === "" && !anyFilter ? " active" : "")}
+            className={"tree-row root" + (dir === "" && !searchActive ? " active" : "")}
             onClick={() => {
-              setQuery("");
-              setTypeFilter(null);
+              setQuery(""); // 루트로 이동(검색은 해제, 타입 모드는 유지)
               setDir("");
             }}
           >
@@ -1027,10 +1146,11 @@ export function AssetsView({ onInfo, onPreview }: Props) {
           ) : (
             <FolderTree
               nodes={tree}
-              current={anyFilter ? "" : dir}
-              onSelect={(p) => { setQuery(""); setTypeFilter(null); setDir(p); }}
+              current={searchActive ? "" : dir}
+              onSelect={(p) => { setQuery(""); setDir(p); }}
               expanded={expanded}
               onToggle={toggleDir}
+              typeFilter={typeFilter}
             />
           )}
         </aside>
@@ -1118,7 +1238,7 @@ export function AssetsView({ onInfo, onPreview }: Props) {
               </div>
             )}
 
-            {anyFilter ? (
+            {searchActive ? (
               <span className="crumb-search">
                 {activeTags.size
                   ? [...activeTags].map((t) => `#${t}`).join(" ")
@@ -1144,7 +1264,16 @@ export function AssetsView({ onInfo, onPreview }: Props) {
                 ))}
               </>
             )}
-            <span className="crumb-count">· {files.length}개</span>
+            <span className="crumb-count">
+              {typeFilter === "image"
+                ? t("이미지")
+                : typeFilter === "video"
+                  ? t("영상")
+                  : typeFilter === "audio"
+                    ? t("오디오")
+                    : t("전체")}{" "}
+              · {files.length}{t("개")}
+            </span>
 
             <div className="assets-tools">
               {/* 필터: 컬러 dot · S(소스만) · T(태그 패널) — 슬라이더 왼쪽 */}
@@ -1230,9 +1359,20 @@ export function AssetsView({ onInfo, onPreview }: Props) {
                   <ListIcon />
                 </button>
                 <button
-                  className={layout === "grid" ? "on" : ""}
-                  onClick={() => setLayout("grid")}
-                  title="그리드"
+                  className={
+                    (layout === "grid" ? "on" : "") +
+                    (layout === "grid" && groupByDate ? " grouped" : "")
+                  }
+                  onClick={() =>
+                    layout === "grid" ? setGroupByDate((v) => !v) : setLayout("grid")
+                  }
+                  title={
+                    layout === "grid"
+                      ? groupByDate
+                        ? t("날짜 구분 끄기 (한 번 더)")
+                        : t("파일 날짜별로 구분")
+                      : t("그리드")
+                  }
                 >
                   <GridIcon />
                 </button>
@@ -1295,7 +1435,7 @@ export function AssetsView({ onInfo, onPreview }: Props) {
           {error && <div className="error" style={{ padding: 12 }}>{error}</div>}
 
           {files.length === 0 && !loading ? (
-            <div className="assets-empty">이 폴더에 미디어가 없습니다.</div>
+            <div className="assets-empty">{t("이 폴더에 미디어가 없습니다.")}</div>
           ) : layout === "list" ? (
             <div className="assets-list" onScroll={onContentScroll} {...gridHandlers}>
               {cellEls}
@@ -1310,7 +1450,7 @@ export function AssetsView({ onInfo, onPreview }: Props) {
               }}
               {...gridHandlers}
             >
-              {cellEls}
+              {buildGridCells()}
               {marqueeEl}
             </div>
           )}

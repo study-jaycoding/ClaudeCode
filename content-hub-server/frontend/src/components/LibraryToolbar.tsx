@@ -1,6 +1,7 @@
 // 라이브러리 툴바 (힉스필드식): History(미디어 타입 필터) + 필터 토글 +
 // 썸네일 크기 조절 슬라이더 + List/Grid 레이아웃 토글.
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useT } from "../lib/i18n";
 
 type MediaFilter = "all" | "image" | "video" | "audio";
 
@@ -28,9 +29,12 @@ interface Props {
   onToggleFill: () => void;
   layout: "grid" | "list";
   onLayout: (l: "grid" | "list") => void;
+  groupByDate: boolean; // 그리드 날짜별 구분 모드
+  onToggleGroupByDate: () => void;
   filtersOpen: boolean;
   onToggleFilters: () => void;
   count: number;
+  countMore?: boolean; // 로드된 수 뒤에 '+'(다음 페이지 더 있음)
   loading: boolean;
   failedCount: number; // 실패 항목 수(>0 이면 '실패 정리' 노출)
   onClearFailed: () => void;
@@ -38,10 +42,12 @@ interface Props {
   colorDots: { k: string; hex: string }[];
   colorFilter: Set<string>;
   onToggleColor: (hex: string) => void;
-  sourceOnly: boolean;
-  onToggleSource: () => void;
+  sharedOnly: boolean;
+  onToggleShared: () => void;
   commentOnly: boolean; // C 필터: 미확인 코멘트만 보기
   onToggleComment: () => void;
+  finalOnly?: boolean; // 골드 필터: 최종(골드)만 보기
+  onToggleFinal?: () => void;
   hasUnread: boolean; // 미확인 코멘트 존재 → C 자동 알림(호박색)
   tags: string[];
   tagFilter: Set<string>;
@@ -50,6 +56,12 @@ interface Props {
   onClearTags: () => void; // 필터 해제
   tagPanelOpen: boolean;
   onToggleTagPanel: () => void;
+  // 구성탭(보드) 전용: 크기 슬라이더가 보드 줌을 직접 제어(주면 슬라이더는 scale 대신 이 값을 씀).
+  // 휠로 확대/축소하면 zoomValue 가 갱신돼 슬라이더가 따라 움직인다. 별도 숫자 표시는 없음.
+  zoomValue?: number; // 현재 보드 줌(0.3~2.5)
+  onZoomValue?: (v: number) => void; // 슬라이더 드래그 → 보드 줌 설정
+  // 그래프 보드(히스토리/구성) 모드 — 의미 없는 컨트롤(필터 사이드바 토글·리스트/그리드 토글)을 숨긴다.
+  boardMode?: boolean;
 }
 
 export function LibraryToolbar({
@@ -61,19 +73,24 @@ export function LibraryToolbar({
   onToggleFill,
   layout,
   onLayout,
+  groupByDate,
+  onToggleGroupByDate,
   filtersOpen,
   onToggleFilters,
   count,
+  countMore,
   loading,
   failedCount,
   onClearFailed,
   colorDots,
   colorFilter,
   onToggleColor,
-  sourceOnly,
-  onToggleSource,
+  sharedOnly,
+  onToggleShared,
   commentOnly,
   onToggleComment,
+  finalOnly = false,
+  onToggleFinal,
   hasUnread,
   tags,
   tagFilter,
@@ -82,7 +99,11 @@ export function LibraryToolbar({
   onClearTags,
   tagPanelOpen,
   onToggleTagPanel,
+  zoomValue,
+  onZoomValue,
+  boardMode = false,
 }: Props) {
+  const t = useT();
   const typeLabel = MEDIA_OPTS.find((o) => o.v === typeFilter)?.label ?? "전체";
   const typeIndex = Math.max(0, MEDIA_OPTS.findIndex((o) => o.v === typeFilter));
 
@@ -130,17 +151,19 @@ export function LibraryToolbar({
   };
   return (
     <div className="lib-toolbar">
-      {/* 필터 사이드바 토글 — 열림=▢(사각), 닫힘=▷(삼각) */}
-      <button
-        className={"lib-filter lib-filter-ic" + (filtersOpen ? " on" : "")}
-        onClick={onToggleFilters}
-        title={filtersOpen ? "필터 사이드바 닫기" : "필터 사이드바 열기"}
-      >
-        {filtersOpen ? "▢" : "▷"}
-      </button>
+      {/* 필터 사이드바 토글 — 열림=▢(사각), 닫힘=▷(삼각). 보드 모드(히스토리)에선 사이드바가 없어 숨김. */}
+      {!boardMode && (
+        <button
+          className={"lib-filter lib-filter-ic" + (filtersOpen ? " on" : "")}
+          onClick={onToggleFilters}
+          title={filtersOpen ? t("필터 사이드바 닫기") : t("필터 사이드바 열기")}
+        >
+          {filtersOpen ? "▢" : "▷"}
+        </button>
+      )}
       {/* 미디어 타입 — 4개 점 슬라이더(전체·이미지·영상·오디오). 슬라이드/점클릭 모두 전환 */}
       <div className="lib-hist-slider" title="미디어 타입 — 슬라이드로 전환">
-        <span className="lib-hist-label">{typeLabel}</span>
+        <span className="lib-hist-label">{t(typeLabel)}</span>
         <div className="lib-hist-range">
           <div className="lib-hist-ticks">
             {MEDIA_OPTS.map((o, i) => (
@@ -148,7 +171,7 @@ export function LibraryToolbar({
                 key={o.v}
                 type="button"
                 className={"lib-hist-tick" + (i === typeIndex ? " on" : "")}
-                title={o.label}
+                title={t(o.label)}
                 onClick={() => onTypeFilter(o.v)}
               />
             ))}
@@ -165,21 +188,29 @@ export function LibraryToolbar({
       </div>
 
       <span className="lib-count">
-        {typeLabel} · {count}건{loading && " · 로딩…"}
+        {t(typeLabel)} · {count}{countMore ? "+" : ""}{t("건")}{loading && ` · ${t("로딩…")}`}
       </span>
       {failedCount > 0 && (
         <button
           className="lib-clear-failed"
-          title="힉스필드에 안 올라간 실패 항목 정리 (실제 힉스필드엔 영향 없음)"
+          title="실패·NSFW 차단 등 비정상 생성물을 휴지통으로 (복구 가능 · 힉스필드 원본엔 영향 없음)"
           onClick={onClearFailed}
         >
-          실패 정리
+          실패·차단 정리 ({failedCount})
         </button>
       )}
 
       <div className="lib-tools">
-        {/* 인스턴트 필터: 컬러 dot · S(소스만) · T(태그) — 에셋 파트와 동일 */}
+        {/* 인스턴트 필터: 골드(최종만) · 컬러 dot · S(팀 공유만) · T(태그) · C(코멘트) */}
         <div className="assets-filters">
+          {/* 골드 dot — 레드 앞. 누르면 최종(골드) 지정된 것만 필터. */}
+          {onToggleFinal && (
+            <button
+              className={"af-dot af-dot-gold" + (finalOnly ? " on" : "")}
+              title="최종(골드)으로 지정된 것만 보기"
+              onClick={onToggleFinal}
+            />
+          )}
           {colorDots.map(({ k, hex }) => {
             const on = colorFilter.has(hex);
             return (
@@ -199,9 +230,9 @@ export function LibraryToolbar({
             );
           })}
           <button
-            className={"af-btn" + (sourceOnly ? " on" : "")}
-            title="소스로 등록된 것만 보기"
-            onClick={onToggleSource}
+            className={"af-btn" + (sharedOnly ? " on" : "")}
+            title="팀에 공유된 것만 보기"
+            onClick={onToggleShared}
           >
             S
           </button>
@@ -292,24 +323,28 @@ export function LibraryToolbar({
           {fill ? "▣" : "▢"}
         </button>
 
-        {/* 썸네일 크기 조절 바 */}
-        <div className="size-slider" title="카드 크기">
+        {/* 크기 조절 바 — 구성탭(onZoomValue)이면 보드 줌(0.3~2.5)을 직접 제어(휠 확대/축소와 연동),
+            그 외 탭은 카드 크기(scale, 0.7~1.7). */}
+        <div className="size-slider" title={onZoomValue ? "화면 확대/축소" : "카드 크기"}>
           <input
             type="range"
-            min={0.7}
-            max={1.7}
+            min={onZoomValue ? 0.3 : 0.7}
+            max={onZoomValue ? 2.5 : 1.7}
             step={0.05}
-            value={scale}
-            onChange={(e) => onScale(Number(e.target.value))}
+            value={onZoomValue ? (zoomValue ?? 1) : scale}
+            onChange={(e) =>
+              onZoomValue ? onZoomValue(Number(e.target.value)) : onScale(Number(e.target.value))
+            }
           />
         </div>
 
-        {/* List / Grid 토글 */}
+        {/* List / Grid 토글 — 보드 모드(히스토리 그래프)에선 의미 없어 숨김. */}
+        {!boardMode && (
         <div className="layout-toggle">
           <button
             className={layout === "list" ? "on" : ""}
             onClick={() => onLayout("list")}
-            title="리스트"
+            title={t("리스트")}
           >
             <svg
               viewBox="0 0 24 24"
@@ -326,9 +361,15 @@ export function LibraryToolbar({
             </svg>
           </button>
           <button
-            className={layout === "grid" ? "on" : ""}
-            onClick={() => onLayout("grid")}
-            title="그리드"
+            className={(layout === "grid" ? "on" : "") + (layout === "grid" && groupByDate ? " grouped" : "")}
+            onClick={() => (layout === "grid" ? onToggleGroupByDate() : onLayout("grid"))}
+            title={
+              layout === "grid"
+                ? groupByDate
+                  ? t("날짜 구분 끄기 (한 번 더)")
+                  : t("힉스필드 날짜별로 구분")
+                : t("그리드")
+            }
           >
             <svg
               viewBox="0 0 24 24"
@@ -347,6 +388,7 @@ export function LibraryToolbar({
             </svg>
           </button>
         </div>
+        )}
       </div>
     </div>
   );

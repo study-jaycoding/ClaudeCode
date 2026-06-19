@@ -1,8 +1,9 @@
-"""생성·재활용 라우터 (Phase 3).
+"""생성 메타데이터·재활용 라우터.
 
-생성 요청을 받아 로컬 generation 레코드를 만들고 잡 큐에 등록한다.
-실제 CLI 생성은 잡 큐 워커(services/jobs.py)에서 비동기로 수행되며,
-진행률은 WebSocket(/ws)으로 push 된다.
+⚠️ 생성/재생성 '실행'은 더는 서버가 하지 않는다(push 모델 — project_content_hub_push_model).
+   허브 버튼은 `POST /api/gen-requests`(routers/gen_requests.py)로 로컬 실행을 요청하고,
+   요청자 PC의 에이전트가 자기 CLI로 실행한다. 이 라우터에 남은 CLI 호출은 **계정 무관
+   공유 메타데이터**(모델 목록·params·비용)와 동기화·검증·워크스페이스 등 보조 기능뿐.
 """
 
 from __future__ import annotations
@@ -11,58 +12,34 @@ import subprocess
 import sys
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from .. import repo
-from ..config import DEFAULT_WORKER_ID, MEDIA_DIR
+from .. import rbac, repo
+from ..config import AUTH_ENABLED, DEFAULT_WORKER_ID, MEDIA_DIR
+from ..deps import (
+    account_global_roles,
+    actor_id,
+    require_edit_generation,
+    require_view_generation,
+)
 from ..models import (
     ColorIn,
     CommentIn,
-    GenerationCreate,
     GenerationOut,
+    HistoryEdgeIn,
+    HistoryGraphOut,
+    HistoryOut,
     ModelOut,
-    RegenerateIn,
     SourceIn,
     TagsIn,
 )
 import asyncio
 
 from ..services import cli_bridge, media_cache, syncer
-from ..services.jobs import GenJob, queue
-from .assets import _safe_project_dir, _safe_resolve
+from .assets import _safe_resolve
 
 router = APIRouter(prefix="/api", tags=["generation"])
-
-# @Image1 / @Video 슬롯 role → higgsfield create 미디어 플래그
-_ROLE_TO_FLAG = {
-    "@image": "--image",
-    "@video": "--video",
-    "@start": "--start-image",
-    "@end": "--end-image",
-    "@audio": "--audio",
-}
-
-
-def _media_flag(role: str) -> str:
-    key = (role or "").lower()
-    for prefix, flag in _ROLE_TO_FLAG.items():
-        if key.startswith(prefix):
-            return flag
-    return "--image"
-
-
-def _resolve_media_value(file_path: str) -> str:
-    """에셋 파트 소스 토큰('asset:{project}|{path}')은 절대 로컬 경로로 resolve.
-    CLI 가 로컬 경로를 자동 업로드하므로 그대로 넘기면 된다. 그 외(원격 URL/UUID/경로)는 통과."""
-    if not file_path.startswith("asset:"):
-        return file_path
-    proj, _, rel = file_path[len("asset:"):].partition("|")
-    pdir = _safe_project_dir(proj)
-    target = _safe_resolve(pdir, rel) if pdir else None
-    if not target or not target.is_file():
-        raise HTTPException(status_code=400, detail=f"에셋 소스 파일 없음: {rel}")
-    return str(target)
 
 
 class RevealMediaIn(BaseModel):
@@ -94,6 +71,8 @@ def reveal_media(body: RevealMediaIn):
     return {"ok": True}
 
 
+# ── 계정 무관 공유 메타데이터(서버 CLI 제공) — 모델 목록·params·비용. 모두에게 동일한
+#    데이터라 서버의 힉스필드 CLI 가 대표로 제공한다(생성 '실행'과 달리 계정별 분리 불필요).
 @router.get("/models", response_model=list[ModelOut])
 async def list_models():
     """생성 모달용 모델 목록(CLI). 네트워크 호출이므로 명시적 엔드포인트."""
@@ -161,9 +140,15 @@ def import_bundle(bundle: dict[str, Any]):
 
 
 @router.get("/creators")
-def list_creators():
-    """생성자 목록(팀 워크스페이스 작성자) [{uid, name, count, is_mine}]."""
-    return repo.list_creators()
+def list_creators(
+    request: Request,
+    tab: str = Query("my", pattern="^(my|team)$"),
+    project_id: str | None = None,
+):
+    """생성자 목록 — project_id 가 오면 그 프로젝트 참여 인원(멤버), 아니면 My=본인/Team=공유물 작성자."""
+    acc = getattr(request.state, "account", None)
+    account_uid = acc.get("creator_uid") if acc else None
+    return repo.list_creators(account_uid=account_uid, tab=tab, project_id=project_id)
 
 
 class CreatorNameIn(BaseModel):
@@ -184,9 +169,38 @@ def claim_creator(uid: str):
     return repo.set_my_creator(uid)
 
 
+def _require_house(request: Request) -> None:
+    """워크스페이스 전환은 서버 CLI(=하우스 계정) 전역 상태만 바꾼다 → 다른 사용자가 토글하면
+    하우스 컨텍스트가 바뀐다. 그래서 로그인 계정의 creator_uid 가 서버 힉스필드(my_creator_uid)와
+    같은 '하우스 계정'만 허용. AUTH off(account 없음)면 단독 모드라 통과."""
+    acc = getattr(request.state, "account", None)
+    if not acc:
+        return
+    if acc.get("creator_uid") and acc.get("creator_uid") == repo.get_my_uid():
+        return
+    raise HTTPException(
+        status_code=403,
+        detail="워크스페이스 전환은 서버에 연결된 힉스필드 계정(하우스)만 가능합니다.",
+    )
+
+
+async def _verify_workspace(expect_id: str | None) -> list[dict[str, Any]]:
+    """set/unset 후 실제 컨텍스트가 의도대로 바뀌었는지 검증. expect_id=None=개인(아무것도 선택 안 됨)."""
+    workspaces = await cli_bridge.list_workspaces()
+    if expect_id is None:
+        if any(w.get("is_selected") for w in workspaces):
+            raise HTTPException(status_code=502, detail="워크스페이스 해제가 반영되지 않았습니다(CLI 상태 불일치).")
+    else:
+        sel = next((w for w in workspaces if w.get("id") == expect_id), None)
+        if not sel or not sel.get("is_selected"):
+            raise HTTPException(status_code=502, detail="워크스페이스 전환이 반영되지 않았습니다(CLI 상태 불일치).")
+    return workspaces
+
+
 @router.get("/workspaces")
 async def list_workspaces():
-    """워크스페이스 목록(개인/팀). is_selected 로 현재 컨텍스트 표시."""
+    """워크스페이스 목록(개인/팀). is_selected 로 현재 컨텍스트 표시.
+    ⚠️ 서버 CLI(하우스 계정) 기준 — 모든 로그인 사용자에게 같은 목록이 보인다."""
     return await cli_bridge.list_workspaces()
 
 
@@ -195,20 +209,29 @@ class WorkspaceSelectIn(BaseModel):
 
 
 @router.post("/workspaces/select")
-async def select_workspace(body: WorkspaceSelectIn):
-    """워크스페이스 선택(팀 공유 UUID 공간으로 전환) 후 재동기화.
-    이후 generate list/get/create 가 해당 워크스페이스로 스코프된다."""
-    await cli_bridge.set_workspace(body.workspace_id)
+async def select_workspace(body: WorkspaceSelectIn, request: Request):
+    """워크스페이스 선택(팀 공유 UUID 공간으로 전환) 후 검증·재동기화. 하우스 계정만."""
+    _require_house(request)
+    try:
+        await cli_bridge.set_workspace(body.workspace_id)
+    except cli_bridge.CLIError as e:
+        raise HTTPException(status_code=502, detail=f"워크스페이스 전환 실패: {e}")
+    workspaces = await _verify_workspace(body.workspace_id)  # 반영 확인(불일치면 502)
     counts = await syncer.sync_now()  # 새 컨텍스트의 잡을 즉시 반영
-    return {"workspaces": await cli_bridge.list_workspaces(), "sync": counts}
+    return {"workspaces": workspaces, "sync": counts}
 
 
 @router.post("/workspaces/unselect")
-async def unselect_workspace():
-    """워크스페이스 해제 → 개인 계정 컨텍스트 복귀 후 재동기화."""
-    await cli_bridge.unset_workspace()
+async def unselect_workspace(request: Request):
+    """워크스페이스 해제 → 개인 계정 컨텍스트 복귀 후 검증·재동기화. 하우스 계정만."""
+    _require_house(request)
+    try:
+        await cli_bridge.unset_workspace()
+    except cli_bridge.CLIError as e:
+        raise HTTPException(status_code=502, detail=f"워크스페이스 해제 실패: {e}")
+    workspaces = await _verify_workspace(None)
     counts = await syncer.sync_now()
-    return {"workspaces": await cli_bridge.list_workspaces(), "sync": counts}
+    return {"workspaces": workspaces, "sync": counts}
 
 
 @router.post("/cost")
@@ -220,71 +243,94 @@ async def estimate_cost(body: CostIn):
         raise HTTPException(status_code=502, detail=str(e))
 
 
-@router.post("/generations", response_model=GenerationOut, status_code=201)
-async def create_generation(body: GenerationCreate):
-    worker_id = body.worker_id or DEFAULT_WORKER_ID
-    # 에셋 참조 해석(없는 파일이면 400)을 레코드 삽입보다 먼저 — 실패 시 큐에도 안 들어간
-    # pending 카드가 고아로 남지 않게(검증→삽입 순서).
-    media = [(_media_flag(r.role), _resolve_media_value(r.file_path)) for r in body.references]
-    gen_id = repo.create_local_generation(body.model_dump(), worker_id)
-
-    await queue.enqueue(
-        GenJob(
-            generation_id=gen_id,
-            model=body.model,
-            prompt=body.prompt,
-            params=body.params,
-            media=media,
-        )
+def _viewer_scope(request: Request) -> tuple[str | None, bool]:
+    """(viewer_uid, read_all) — 계보 관련 노드 가시성 판정용.
+    read_all = 단독 모드(AUTH off) 또는 전역 read_all(admin/PM/PD) 보유."""
+    acc = getattr(request.state, "account", None)
+    viewer_uid = acc.get("creator_uid") if acc else None
+    read_all = (not AUTH_ENABLED) or rbac.has_global_cap(
+        account_global_roles(request), "read_all"
     )
+    return viewer_uid, read_all
+
+
+@router.get("/generations/{gen_id}/history", response_model=HistoryOut)
+def get_history(gen_id: str, request: Request):
+    """한 결과물의 가계(재료⬆/파생⬇/사용처/약한형제) — 카드 히스토리 뱃지 클릭 시 패널 표시용."""
     gen = repo.get_generation(gen_id)
     if not gen:
-        raise HTTPException(status_code=500, detail="생성 레코드 조회 실패")
-    return gen
+        raise HTTPException(status_code=404, detail="generation 없음")
+    require_view_generation(request, gen)  # GET /{id} 와 동일 가시성(비공개는 본인/공유만)
+    viewer_uid, read_all = _viewer_scope(request)
+    data = repo.get_history(gen_id, viewer_uid=viewer_uid, read_all=read_all)
+    if not data:
+        raise HTTPException(status_code=404, detail="generation 없음")
+    return data
 
 
-@router.post("/generations/{gen_id}/regenerate", response_model=GenerationOut, status_code=201)
-async def regenerate(gen_id: str, body: RegenerateIn):
-    """기존 generation 을 복제해 새 잡 생성 + lineage 기록(DESIGN.md §3-7)."""
-    parent = repo.get_generation(gen_id)
-    if not parent:
-        raise HTTPException(status_code=404, detail="원본 generation 없음")
+@router.get("/generations/{gen_id}/history-tree", response_model=HistoryGraphOut)
+def get_history_tree(gen_id: str, request: Request):
+    """연결된 가계 전체 그래프(노드+엣지+루트) — 구성탭 히스토리 트리 렌더용."""
+    gen = repo.get_generation(gen_id)
+    if not gen:
+        raise HTTPException(status_code=404, detail="generation 없음")
+    require_view_generation(request, gen)
+    viewer_uid, read_all = _viewer_scope(request)
+    data = repo.get_history_graph(gen_id, viewer_uid=viewer_uid, read_all=read_all)
+    if not data:
+        raise HTTPException(status_code=404, detail="generation 없음")
+    return data
 
-    worker_id = body.worker_id or parent["worker_id"] or DEFAULT_WORKER_ID
-    child_id = repo.import_generation(gen_id, worker_id)  # 복제 + lineage
 
-    # 재생성 시 프롬프트/모델/컬러를 선택적으로 덮어쓴다(없으면 부모 값 유지).
-    if body.color is not None:
-        repo.set_color(child_id, body.color)
-    if body.prompt or body.model:
-        repo.override_prompt_model(child_id, prompt=body.prompt, model=body.model)
-    # 재생성 시점에 무장된 자동태그를 결과물에 적용(부모 자동태그에 더해짐).
-    if body.auto_tags:
-        repo.add_auto_tags(child_id, body.auto_tags)
+@router.post("/generations/{gen_id}/history", response_model=HistoryOut, status_code=201)
+def add_history(gen_id: str, body: HistoryEdgeIn, request: Request):
+    """수동 히스토리 연결 — 이 결과물(gen_id)의 부모를 손으로 지정(동기화 잡 등). 갱신된 가계 반환."""
+    gen = repo.get_generation(gen_id)
+    if not gen:
+        raise HTTPException(status_code=404, detail="generation 없음")
+    require_edit_generation(request, gen)  # 히스토리 수정은 본인/admin 만
+    try:
+        repo.add_history_edge(body.parent_gen_id, gen_id, body.relation)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return repo.get_history(gen_id)
 
-    child = repo.get_generation(child_id)
-    # 캐시된 레퍼런스는 file_path 가 /media 로컬 경로 → CLI 가 못 읽는다.
-    # 원본 원격 URL(source_url)을 우선 사용(없으면 file_path/에셋 토큰).
-    media = [
-        (_media_flag(r.get("role") or ""), _resolve_media_value(r.get("source_url") or r["file_path"]))
-        for r in (child["references"] if child else [])
-    ]
-    await queue.enqueue(
-        GenJob(
-            generation_id=child_id,
-            model=child["model"] if child else (body.model or parent["model"]),
-            prompt=child["prompt"] if child else (body.prompt or parent["prompt"]),
-            params=(child.get("params") if child else None) or {},
-            media=media,
-        )
-    )
-    return child
+
+@router.delete("/generations/{gen_id}/history/{parent_gen_id}", response_model=HistoryOut)
+def remove_history(gen_id: str, parent_gen_id: str, request: Request):
+    """히스토리 엣지 해제 — 이 결과물과 그 부모의 연결을 푼다. 갱신된 가계 반환."""
+    gen = repo.get_generation(gen_id)
+    if not gen:
+        raise HTTPException(status_code=404, detail="generation 없음")
+    require_edit_generation(request, gen)  # 히스토리 수정은 본인/admin 만
+    repo.remove_history_edge(parent_gen_id, gen_id)
+    return repo.get_history(gen_id)
+
+
+class DeriveFromIn(BaseModel):
+    parent_ids: list[str]
+
+
+@router.post("/generations/{gen_id}/derive-from", response_model=HistoryOut)
+def derive_from(gen_id: str, body: DeriveFromIn, request: Request):
+    """생성 직후 파생 부모(들)를 'derived' 엣지로 일괄 기록 — **전이 축소** 적용.
+    후보 중 다른 후보(또는 child)의 조상인 것은 잉여(자손을 거쳐 도달)라 빼고 가장 가까운 부모만 남긴다.
+    (드래그 부모 + 보드 포커스/선택이 합쳐져 들어와도 원본→중간→자식 체인이 평탄해지지 않게 한다.)"""
+    gen = repo.get_generation(gen_id)
+    if not gen:
+        raise HTTPException(status_code=404, detail="generation 없음")
+    require_edit_generation(request, gen)  # 본인/admin 만 — 계보 기록도 수정 가드와 동일
+    repo.record_derived_parents(gen_id, body.parent_ids)
+    viewer_uid, read_all = _viewer_scope(request)
+    return repo.get_history(gen_id, viewer_uid=viewer_uid, read_all=read_all)
 
 
 @router.put("/generations/{gen_id}/tags", response_model=GenerationOut)
-def set_tags(gen_id: str, body: TagsIn):
-    if not repo.get_generation(gen_id):
+def set_tags(gen_id: str, body: TagsIn, request: Request):
+    gen = repo.get_generation(gen_id)
+    if not gen:
         raise HTTPException(status_code=404, detail="generation 없음")
+    require_edit_generation(request, gen)  # 본인/admin 만 수정
     repo.set_tags(gen_id, body.tags)
     return repo.get_generation(gen_id)
 
@@ -325,46 +371,71 @@ async def verify_higgsfield():
 
 
 @router.delete("/generations/{gen_id}")
-def delete_generation(gen_id: str):
-    """generation 1건 삭제(자식 행 포함). 로컬 기록만 제거 — 힉스필드 원본엔 영향 없음."""
+def delete_generation(gen_id: str, request: Request):
+    """generation 1건 휴지통행(soft delete). 우리 카탈로그에서만 숨김 —
+    힉스필드 원본엔 영향 없음. '지운 생성물 보기' 토글로 흐리게 재표시·복구 가능."""
+    gen = repo.get_generation(gen_id)
+    if gen:
+        require_edit_generation(request, gen)  # 본인/admin 만 삭제
     return {"deleted": repo.delete_generation(gen_id)}
 
 
+@router.post("/generations/{gen_id}/restore")
+def restore_generation(gen_id: str, request: Request):
+    """휴지통에서 복구 — 카탈로그에 정상 표시로 되돌림."""
+    gen = repo.get_generation(gen_id)
+    if gen:
+        require_edit_generation(request, gen)
+    return {"restored": repo.restore_generation(gen_id)}
+
+
 @router.put("/generations/{gen_id}/color", response_model=GenerationOut)
-def set_color(gen_id: str, body: ColorIn):
-    if not repo.get_generation(gen_id):
+def set_color(gen_id: str, body: ColorIn, request: Request):
+    gen = repo.get_generation(gen_id)
+    if not gen:
         raise HTTPException(status_code=404, detail="generation 없음")
+    require_edit_generation(request, gen)  # 본인/admin 만 수정
     repo.set_color(gen_id, body.color)
     return repo.get_generation(gen_id)
 
 
 @router.put("/generations/{gen_id}/source", response_model=GenerationOut)
-def set_source(gen_id: str, body: SourceIn):
+def set_source(gen_id: str, body: SourceIn, request: Request):
     """소스 라이브러리 등록/해제(@이름). 등록하면 @ 피커에 노출된다."""
-    if not repo.get_generation(gen_id):
+    gen = repo.get_generation(gen_id)
+    if not gen:
         raise HTTPException(status_code=404, detail="generation 없음")
+    require_edit_generation(request, gen)  # 본인/admin 만 수정
     repo.set_source(gen_id, body.name, body.is_source)
     return repo.get_generation(gen_id)
 
 
 @router.get("/sources", response_model=list[GenerationOut])
 def list_sources(
+    request: Request,
     query: str | None = None,
     tag: str | None = None,
     asset_project: str | None = None,
     asset_dir: str | None = None,
 ):
     """스포트라이트 @/# 피커: 소스 등록된 생성본을 이름/태그로 검색.
-    asset_project 가 오면 에셋 파트 소스(현재 폴더 asset_dir 로 스코프)도 함께 반환."""
+    asset_project 가 오면 에셋 파트 소스(현재 폴더 asset_dir 로 스코프)도 함께 반환.
+    에셋 소스는 계정별 개인화라 내(actor_id) 것만 합류한다."""
     return repo.search_sources(
-        query=query, tag=tag, asset_project=asset_project, asset_dir=asset_dir
+        query=query,
+        tag=tag,
+        asset_project=asset_project,
+        asset_dir=asset_dir,
+        owner_uid=actor_id(request),
     )
 
 
 @router.put("/generations/{gen_id}/comment", response_model=GenerationOut)
-def set_comment(gen_id: str, body: CommentIn):
-    if not repo.get_generation(gen_id):
+def set_comment(gen_id: str, body: CommentIn, request: Request):
+    gen = repo.get_generation(gen_id)
+    if not gen:
         raise HTTPException(status_code=404, detail="generation 없음")
+    require_edit_generation(request, gen)  # gen 자체 코멘트 필드 수정 — 본인/admin 만
     repo.set_comment(gen_id, body.comment)
     return repo.get_generation(gen_id)
 
@@ -387,31 +458,39 @@ class GenCommentReadIn(BaseModel):
 
 
 @router.get("/generations/{gen_id}/comments")
-def list_gen_comments(gen_id: str):
+def list_gen_comments(gen_id: str, request: Request):
     """생성본 코멘트 스레드(작성자·시각 포함, 오래된→최신)."""
-    return repo.list_generation_comments(gen_id)
+    gen = repo.get_generation(gen_id)
+    if not gen:
+        raise HTTPException(status_code=404, detail="generation 없음")
+    require_view_generation(request, gen)  # 비공개 남의 코멘트 열람 차단(공유/본인만)
+    return repo.list_generation_comments(gen_id, actor_id(request))
 
 
 @router.post("/generations/{gen_id}/comments")
-def add_gen_comment(gen_id: str, body: GenCommentAddIn):
-    if not repo.get_generation(gen_id):
+def add_gen_comment(gen_id: str, body: GenCommentAddIn, request: Request):
+    gen = repo.get_generation(gen_id)
+    if not gen:
         raise HTTPException(status_code=404, detail="generation 없음")
+    require_view_generation(request, gen)  # 볼 수 있는 것(공유/본인)에만 코멘트 작성
     text = (body.text or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="빈 코멘트")
+    # 작성자는 로그인 신원(creator_uid)으로 귀속 — body.author 는 무시(클라가 'me' 로 보내던
+    # 값을 더는 신뢰하지 않는다). AUTH off 면 actor_id 가 'me' 로 떨어져 기존 단독 동작 유지.
     cid = repo.add_generation_comment(
-        gen_id, body.author or DEFAULT_WORKER_ID, text, body.parent_id, body.muted
+        gen_id, actor_id(request), text, body.parent_id, body.muted
     )
     return {"id": cid}
 
 
 @router.put("/generation-comments/{comment_id}")
-def edit_gen_comment(comment_id: str, body: GenCommentEditIn):
+def edit_gen_comment(comment_id: str, body: GenCommentEditIn, request: Request):
     text = (body.text or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="빈 코멘트")
     try:
-        repo.edit_generation_comment(comment_id, body.worker_id or DEFAULT_WORKER_ID, text)
+        repo.edit_generation_comment(comment_id, actor_id(request), text)
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
     except ValueError as e:
@@ -420,17 +499,28 @@ def edit_gen_comment(comment_id: str, body: GenCommentEditIn):
 
 
 @router.delete("/generation-comments/{comment_id}")
-def delete_gen_comment(comment_id: str, worker_id: str = DEFAULT_WORKER_ID):
+def delete_gen_comment(comment_id: str, request: Request):
     try:
-        repo.delete_generation_comment(comment_id, worker_id)
+        repo.delete_generation_comment(comment_id, actor_id(request))
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
     return {"ok": True}
 
 
 @router.post("/generations/{gen_id}/comments/read")
-def read_gen_comments(gen_id: str, body: GenCommentReadIn):
-    repo.mark_generation_comments_read(body.worker_id or DEFAULT_WORKER_ID, gen_id)
+def read_gen_comments(gen_id: str, body: GenCommentReadIn, request: Request):
+    gen = repo.get_generation(gen_id)
+    if not gen:
+        raise HTTPException(status_code=404, detail="generation 없음")
+    require_view_generation(request, gen)
+    repo.mark_generation_comments_read(actor_id(request), gen_id)
+    return {"ok": True}
+
+
+@router.post("/generation-comments/{comment_id}/seen")
+def seen_gen_comment(comment_id: str, request: Request):
+    """코멘트 한 건 확인 처리(패널에서 NEW 코멘트 클릭). 개인 상태라 멱등·가벼운 처리."""
+    repo.mark_generation_comment_seen(actor_id(request), comment_id)
     return {"ok": True}
 
 

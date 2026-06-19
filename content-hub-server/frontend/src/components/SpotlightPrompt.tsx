@@ -24,14 +24,15 @@ import {
 } from "../lib/promptEditor";
 import type { ChipRef, HistEntry } from "../lib/promptEditor";
 import { useAccountStatus } from "../lib/useAccountStatus";
-import { useModels, ALLOWED, HIDDEN_PARAMS } from "../lib/useModels";
+import { useModels, ALLOWED, HIDDEN_PARAMS, effectiveDefault, numericRange } from "../lib/useModels";
 import type { Generation } from "../types";
 
 const MAX_COUNT = 4; // 한 번에 생성할 최대 장수(배치)
 
 interface Props {
   // created: 방금 만든 pending 생성본들 — 즉시 '대기' 카드로 띄우게(optimistic). 없으면 그냥 리로드.
-  onCreated: (created?: Generation[]) => void;
+  // dragParentId: 카드를 드래그해 불러와 만든 경우 그 원본 gen id → 자동 히스토리(원본→파생) 부모.
+  onCreated: (created?: Generation[], dragParentId?: string | null) => void;
   armedAutoTags: string[]; // 무장된 자동 태그 — 생성 시 결과물에 자동 적용(별도 네임스페이스)
   topSlot?: ReactNode; // 도크 상단(프롬프트 바로 위)에 끼우는 슬롯 — 멀티 선택 바
   activeProjectId?: string; // 현재 보고 있는 프로젝트 — 생성 시 자동 귀속(로드맵 §0-4)
@@ -40,14 +41,50 @@ interface Props {
 // 노출 모델 화이트리스트(ALLOWED)·숨김 파라미터(HIDDEN_PARAMS)·모델/파라미터/비용 로직은
 // useModels 훅으로 추출. onPanelDrop 에서 쓰는 상수만 훅 모듈에서 import 해 재사용.
 
-// duration 초 범위 — CLI 스키마(model get)에 min/max 가 없어 `generate cost` 로 검증한 값으로 보강.
-//  seedance_2_0: CLI 가 "duration >= 4" 강제(min=4). 상한은 CLI 가 막지 않으나 실용/비용상 12s 로 둠.
+// duration 초 범위 — CLI 스키마(model get)에 min/max 가 없어 모델 스펙(models_explore)으로 보강.
+//  seedance_2_0: 힉스필드 공식 스펙 duration_range = {min:4, max:15}.
+//    (generate cost 는 선형 계산기라 16s·60s 도 에러 없이 값을 내므로 한도 검증에 못 씀.)
 const DURATION_RANGE: Record<string, { min: number; max: number }> = {
-  seedance_2_0: { min: 4, max: 12 },
+  seedance_2_0: { min: 4, max: 15 },
 };
 function durRange(model: string, def: number): { min: number; max: number } {
   return DURATION_RANGE[model] || { min: 1, max: Math.max(12, def * 2) };
 }
+
+// 컨트롤 행 정리(칸 부족 해소): 자주 바꾸는 핵심 파라미터만 인라인 칩으로 두고,
+// 그 외(모드·비트레이트·장르 등 값만으론 의미가 모호한 것)는 '⚙ 고급' 팝오버로 모은다.
+// 모델 비종속 — 모델이 파라미터를 추가해도 자동으로 고급으로 흡수된다.
+const PRIMARY_PARAMS = new Set(["aspect_ratio", "resolution", "duration"]);
+
+// 고급 팝오버 표시 순서(요청: 모드 → 장르 → 비트레이트). 목록에 없는 건 뒤에 원래 순서로.
+const ADV_ORDER = ["mode", "genre", "bitrate_mode"];
+const advRank = (name: string): number => {
+  const i = ADV_ORDER.indexOf(name);
+  return i === -1 ? ADV_ORDER.length : i;
+};
+
+// 파라미터 풀 라벨(고급 팝오버·툴팁용) — 값만 보여선 뭔지 모르는 문제 해소.
+const PARAM_LABEL: Record<string, string> = {
+  aspect_ratio: "비율",
+  resolution: "해상도",
+  duration: "길이",
+  bitrate_mode: "비트레이트",
+  genre: "장르",
+  mode: "모드",
+  quality: "품질",
+  // batch_size 는 UI 에서 숨김(앱 레벨 count=1/4 로 일원화). 라벨 불필요.
+};
+const paramLabel = (name: string): string => PARAM_LABEL[name] || name;
+
+// 일부 값에 의미 라벨(원값 + 한글 힌트) — 그 외는 원값 그대로.
+const VALUE_LABEL: Record<string, string> = {
+  std: "표준(std)",
+  fast: "빠름(fast)",
+  standard: "표준(standard)",
+  high: "고화질(high)",
+  auto: "자동(auto)",
+};
+const valueLabel = (v: string): string => VALUE_LABEL[v] || v;
 
 // 에셋 파트(분리창)가 localStorage 에 쓴 현재 프로젝트/폴더 — 생성 피커 소스 스코프.
 function readAssetCtx(): { project: string; dir: string } {
@@ -77,6 +114,8 @@ function OptIcon({ name }: { name: string }) {
     return <svg {...p}><path d="M4 9V5h4M20 9V5h-4M4 15v4h4M20 15v4h-4" /></svg>;
   if (n.includes("genre") || n.includes("style") || n.includes("preset"))
     return <svg {...p}><path d="M3 7l9-4 9 4-9 4-9-4z" /><path d="M3 12l9 4 9-4" /></svg>;
+  if (n.includes("bitrate") || n.includes("bit_rate"))
+    return <svg {...p}><path d="M3 17l5-5 4 4 8-8" /><path d="M16 4h5v5" /></svg>;
   if (n.includes("fps") || n.includes("motion") || n.includes("frame_rate"))
     return <svg {...p}><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M7 5v14M17 5v14" /></svg>;
   if (n.includes("seed"))
@@ -89,7 +128,7 @@ function OptIcon({ name }: { name: string }) {
 
 export function SpotlightPrompt({ onCreated, armedAutoTags, topSlot, activeProjectId }: Props) {
   // 모델/파라미터/비용 로직은 useModels 훅으로 추출(동작 100% 보존). 로드 실패는 setError 로 보고.
-  const { type, setType, model, setModel, tunable, typeModels, modelName,
+  const { type, setType, model, setModel, tunable, constraints, typeModels, modelName,
           optionValues, setOptionValues, setOpt, cost, costLoading, pendingOptsRef, setOpenRef } =
     useModels((msg) => setError(msg));
   const [count, setCount] = useState(1); // 한 번에 N장 생성(배치)
@@ -98,8 +137,26 @@ export function SpotlightPrompt({ onCreated, armedAutoTags, topSlot, activeProje
   const [error, setError] = useState<string | null>(null);
   // setOpt 가 옵션 선택 후 드롭다운을 닫도록 훅에 setOpen 등록(open/setOpen 은 UI 상태로 컴포넌트에 잔류).
   setOpenRef.current = setOpen;
-  // 계정·CLI 연결 상태(하단 상태줄) — 데이터 도메인 훅으로 분리(IME·에디터 무관).
-  const { cli, account, acctLoading, checkAccount } = useAccountStatus();
+  // 계정·CLI 연결 상태(크레딧·이메일 부차 정보) — 데이터 도메인 훅으로 분리(IME·에디터 무관).
+  const { account, checkAccount } = useAccountStatus();
+  // 에이전트 연결 — push 모델에서 생성/재생성은 내 PC 에이전트가 떠 있어야 실행되므로,
+  // 푸터의 '연결됨' 점은 (서버 CLI 가 아니라) 내 에이전트 연결 = '생성 가능' 여부를 가리킨다.
+  // 폴링은 서버 메모리 상태(agent_signals)만 읽어 가볍다(CLI 비용 없음).
+  const [agentOn, setAgentOn] = useState<boolean | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const check = () =>
+      api
+        .agentStatus()
+        .then((s) => alive && setAgentOn(s.connected))
+        .catch(() => alive && setAgentOn(null));
+    check();
+    const id = window.setInterval(check, 12000);
+    return () => {
+      alive = false;
+      window.clearInterval(id);
+    };
+  }, []);
   // @/# 피커
   const [mention, setMention] = useState<{ kind: "@" | "#"; query: string } | null>(null);
   const [allSources, setAllSources] = useState<Generation[]>([]);
@@ -112,6 +169,8 @@ export function SpotlightPrompt({ onCreated, armedAutoTags, topSlot, activeProje
   // 프롬프트 기록(쉘식 ↑↓): historyRef=제출 기록(오래된→최신), histIdxRef=탐색 위치(-1=라이브)
   const historyRef = useRef<HistEntry[]>(loadHistory());
   const histIdxRef = useRef(-1);
+  // 드래그해서 불러온 원본 gen id — 다음 생성의 자동 히스토리(원본→파생) 부모. 제출 시 1회 소모.
+  const dragParentRef = useRef<string | null>(null);
 
   const updatePlaceholder = () => {
     const ed = editorRef.current;
@@ -231,6 +290,7 @@ export function SpotlightPrompt({ onCreated, armedAutoTags, topSlot, activeProje
       role: isVid ? "@Video" : `@Image${countImageChips(ed) + 1}`,
       name: s.source_name || "source",
       thumb: a.thumbnail_path || a.file_path,
+      source_gen_id: s.id, // 출처 generation → 히스토리 reference 엣지 기록용
     };
     insertChip(ed, ref);
     updatePlaceholder();
@@ -253,6 +313,8 @@ export function SpotlightPrompt({ onCreated, armedAutoTags, topSlot, activeProje
     e.preventDefault();
     try {
       const g = await api.getGeneration(id);
+      // 드래그한 원본 → 다음 생성의 자동 히스토리 부모(원본→파생). 재드래그 시 최신값으로 갱신.
+      dragParentRef.current = id;
       const t: "image" | "video" = g.assets[0]?.type === "video" ? "video" : "image";
       // 원래 모델이 화이트리스트에 있으면 유지, 아니면 타입 기본(첫째)로 클램프
       const useModel = ALLOWED[t].includes(g.model || "") ? (g.model as string) : ALLOWED[t][0];
@@ -321,6 +383,7 @@ export function SpotlightPrompt({ onCreated, armedAutoTags, topSlot, activeProje
           role: r.role,
           name: r.name, // 칩 이름(@소스명) — 정보팝업 인라인 칩 매칭
           thumbnail: r.thumb, // 표시용 썸네일(에셋 소스도 정보팝업에서 이미지로 보이게)
+          source_gen_id: r.source_gen_id, // 출처 generation → 히스토리 reference 엣지
         })),
         project_id: activeProjectId, // 보던 프로젝트로 자동 귀속(없으면 미분류)
       };
@@ -328,7 +391,10 @@ export function SpotlightPrompt({ onCreated, armedAutoTags, topSlot, activeProje
       const created = await Promise.all(
         Array.from({ length: Math.max(1, count) }, () => api.create(body)),
       );
-      onCreated(created); // 방금 만든 pending 들을 즉시 '대기' 카드로(optimistic) + 리로드
+      // 드래그로 불러온 원본이 있으면 그것을 부모로 자동 히스토리 기록(App 이 처리). 1회 소모.
+      const dragParent = dragParentRef.current;
+      dragParentRef.current = null;
+      onCreated(created, dragParent); // 방금 만든 pending 들을 즉시 '대기' 카드로(optimistic) + 리로드
       // 프롬프트 기록에 추가 — 텍스트+칩 구조 보존. 같은 내용은 전부 제거 후 최신으로,
       // 최근 HIST_MAX(20)개만 유지.
       const key = displayPrompt; // 텍스트+@칩 까지 반영한 중복 판정 키
@@ -632,8 +698,9 @@ export function SpotlightPrompt({ onCreated, armedAutoTags, topSlot, activeProje
                 )}
               </div>
 
-              {/* 모델별 CLI 조절 옵션(동적) — duration=슬라이더, enum=드롭다운, 정수=숫자 입력 */}
-              {tunable.map((p) => {
+              {/* 주요 옵션(자주 바꿈)만 인라인 — duration=슬라이더, enum=드롭다운, 정수=숫자 입력.
+                  그 외(mode·bitrate·genre 등)는 아래 '⚙ 고급' 팝오버로. */}
+              {tunable.filter((p) => PRIMARY_PARAMS.has(p.name)).map((p) => {
                 // 듀레이션 → 슬라이더(enum 이면 그 값들에 스냅, 정수면 1..최댓값 범위)
                 if (/duration|length/i.test(p.name)) {
                   if (p.enum?.length) {
@@ -690,16 +757,30 @@ export function SpotlightPrompt({ onCreated, armedAutoTags, topSlot, activeProje
                     {open === p.name && (
                       <div className="sl-dropdown">
                         <div className="sl-dd-scroll">
-                          {p.enum.map((v) => (
-                            <button
-                              key={v}
-                              className={"sl-dd-item" + (optionValues[p.name] === v ? " sel" : "")}
-                              onClick={() => setOpt(p.name, v)}
-                            >
-                              {v}
-                            </button>
-                          ))}
+                          {p.enum.map((v) => {
+                            const con = constraints[p.name];
+                            const blocked = !!con && !con.allow.has(v);
+                            return (
+                              <button
+                                key={v}
+                                className={
+                                  "sl-dd-item" +
+                                  (optionValues[p.name] === v ? " sel" : "") +
+                                  (blocked ? " blocked" : "")
+                                }
+                                disabled={blocked}
+                                onClick={() => !blocked && setOpt(p.name, v)}
+                                title={blocked ? con!.note : undefined}
+                              >
+                                {v}
+                                {blocked && <span className="sl-dd-lock"> 🔒</span>}
+                              </button>
+                            );
+                          })}
                         </div>
+                        {constraints[p.name] && (
+                          <div className="sl-dd-note">{constraints[p.name].note}</div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -720,8 +801,135 @@ export function SpotlightPrompt({ onCreated, armedAutoTags, topSlot, activeProje
                 ) : null;
               })}
 
-              {/* 배치: 한 번에 N장 (1/4) */}
-              <div className="sl-count" title="한 번에 생성할 장수">
+              {/* ⚙ 고급 — 비주요 파라미터(mode·bitrate·genre 등)를 풀 라벨로 모아 한 줄을 비운다.
+                  값이 기본과 다르면(=커스터마이즈됨) 칩을 강조해 '뭔가 바꿨음'을 알린다. */}
+              {(() => {
+                const adv = tunable
+                  .filter((p) => !PRIMARY_PARAMS.has(p.name))
+                  .sort((a, b) => advRank(a.name) - advRank(b.name)); // 모드→장르→비트레이트
+                if (!adv.length) return null;
+                const dirty = adv.some((p) => {
+                  const cur = optionValues[p.name];
+                  return (
+                    cur != null &&
+                    cur !== "" &&
+                    String(cur) !== String(effectiveDefault(p) ?? "")
+                  );
+                });
+                return (
+                  <div className="sl-chip-wrap">
+                    <button
+                      className={
+                        "sl-chip sl-opt-chip" +
+                        (open === "advanced" ? " active" : "") +
+                        (dirty ? " dirty" : "")
+                      }
+                      onClick={() => setOpen(open === "advanced" ? null : "advanced")}
+                      title="고급 옵션 (모드·비트레이트·장르 등)"
+                    >
+                      <span className="sl-opt-ic">
+                        <svg
+                          width={13}
+                          height={13}
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth={2}
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <circle cx="12" cy="12" r="3" />
+                          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                        </svg>
+                      </span>
+                      <span>고급</span>
+                      {dirty && <span className="sl-adv-dot" aria-hidden />}
+                      <span className="sl-caret">›</span>
+                    </button>
+                    {open === "advanced" && (
+                      <div className="sl-dropdown sl-adv-pop">
+                        <div className="sl-dd-title">고급 옵션</div>
+                        {adv.map((p) => {
+                          const cur =
+                            optionValues[p.name] ?? p.default ?? (p.enum ? p.enum[0] : "");
+                          return (
+                            <div className="sl-adv-row" key={p.name}>
+                              <div className="sl-adv-label">
+                                <span className="sl-opt-ic"><OptIcon name={p.name} /></span>
+                                {paramLabel(p.name)}
+                              </div>
+                              {p.enum?.length ? (
+                                <div className="sl-adv-opts">
+                                  {p.enum.map((v) => {
+                                    const con = constraints[p.name];
+                                    const blocked = !!con && !con.allow.has(v);
+                                    return (
+                                      <button
+                                        key={v}
+                                        className={
+                                          "sl-adv-opt" +
+                                          (String(cur) === v ? " sel" : "") +
+                                          (blocked ? " blocked" : "")
+                                        }
+                                        disabled={blocked}
+                                        onClick={() => !blocked && setOpt(p.name, v)}
+                                        title={blocked ? con!.note : valueLabel(v)}
+                                      >
+                                        {valueLabel(v)}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              ) : p.type === "integer" ? (
+                                (() => {
+                                  const rg = numericRange(model, p.name);
+                                  return (
+                                    <input
+                                      className="sl-adv-num"
+                                      type="number"
+                                      min={rg?.min}
+                                      max={rg?.max}
+                                      title={rg ? `허용 범위 ${rg.min}~${rg.max}` : undefined}
+                                      value={String(optionValues[p.name] ?? p.default ?? "")}
+                                      onChange={(e) => {
+                                        const raw = e.target.value;
+                                        setOptionValues((prev) => ({
+                                          ...prev,
+                                          [p.name]:
+                                            raw === ""
+                                              ? ""
+                                              : rg
+                                                ? Math.min(rg.max, Math.max(rg.min, Number(raw)))
+                                                : Number(raw),
+                                        }));
+                                      }}
+                                    />
+                                  );
+                                })()
+                              ) : (
+                                <input
+                                  className="sl-adv-num"
+                                  type="text"
+                                  value={String(optionValues[p.name] ?? p.default ?? "")}
+                                  onChange={(e) =>
+                                    setOptionValues((prev) => ({
+                                      ...prev,
+                                      [p.name]: e.target.value,
+                                    }))
+                                  }
+                                />
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* 배치(장수): 한 번에 N장 — 모든 모델 공통. 각 장은 별도 잡=별도 카드. */}
+              <div className="sl-count" title={`한 번에 생성할 장수 (최대 ${MAX_COUNT}, 각 장이 별도 카드)`}>
                 <button
                   className="sl-count-btn"
                   onClick={() => setCount((c) => Math.max(1, c - 1))}
@@ -748,7 +956,15 @@ export function SpotlightPrompt({ onCreated, armedAutoTags, topSlot, activeProje
               {costLoading ? (
                 <span className="sl-cost loading">…</span>
               ) : (
-                cost != null && cost > 0 && <span className="sl-cost">{cost * count}</span>
+                cost != null &&
+                cost > 0 && (
+                  <span
+                    className="sl-cost"
+                    title={`예상 크레딧 ${cost}${count > 1 ? ` × ${count}장 = ${cost * count}` : ""} (해상도·길이·모드에 따라 변동)`}
+                  >
+                    {count > 1 ? `${cost}×${count}=${cost * count}` : cost * count}
+                  </span>
+                )
               )}
             </button>
           </div>
@@ -759,18 +975,16 @@ export function SpotlightPrompt({ onCreated, armedAutoTags, topSlot, activeProje
         <button
           type="button"
           className="sl-status"
-          title="클릭 — 연결·크레딧 수동 확인"
+          title="생성·재생성은 내 PC의 에이전트가 켜져 있어야 실행됩니다(run-agent.bat). 클릭=크레딧 확인"
           onClick={checkAccount}
         >
-          <span className={"sl-status-dot" + (cli ? " on" : "")} />
+          <span className={"sl-status-dot" + (agentOn ? " on" : "")} />
           <span>
-            {acctLoading
-              ? "확인 중…"
-              : cli == null
-                ? "클릭해 연결 확인"
-                : cli
-                  ? "연결됨"
-                  : "미연결"}
+            {agentOn == null
+              ? "에이전트 확인 중…"
+              : agentOn
+                ? "연결됨"
+                : "에이전트 꺼짐 — 생성하려면 실행"}
           </span>
           {account?.credits != null && (
             <>

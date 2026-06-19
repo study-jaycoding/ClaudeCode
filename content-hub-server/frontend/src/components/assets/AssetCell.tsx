@@ -1,6 +1,6 @@
 // Assets 그리드/리스트의 단일 셀(메모이제이션) — 미디어 썸네일 + 호버 오버레이 + S·T·C 상태줄.
 // 핸들러는 path 인자를 받는 안정 참조로만 받아 React.memo 가 변화 없는 셀을 건너뛴다.
-import { memo, useRef, useState } from "react";
+import { memo, useRef } from "react";
 import { api } from "../../api";
 import type { AssetMeta, AssetNode, InfoTarget } from "../../types";
 
@@ -19,7 +19,6 @@ export const AssetCell = memo(function AssetCell({
   onC,
   onTagCommit,
   onTagCancel,
-  onTagRemove,
   onInfo,
   onExportDrag,
 }: {
@@ -37,14 +36,12 @@ export const AssetCell = memo(function AssetCell({
   onC: (path: string) => void;
   onTagCommit: (path: string, tags: string[]) => void;
   onTagCancel: () => void;
-  onTagRemove: (path: string, tag: string) => void;
   onInfo: (t: InfoTarget) => void;
   // 네이티브 파일 드래그 시작 → 부모가 선택 상태를 보고 단일/다중(zip) DownloadURL 설정 + 마퀴 취소
   onExportDrag: (path: string, dt: DataTransfer) => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
-  const [showTags, setShowTags] = useState(false); // # 버튼 클릭 시 적용된 태그 목록 표시
   const url = api.assetFileUrl(project, node.path);
   const isVideo = node.type === "video";
   const isAudio = node.type === "audio";
@@ -82,90 +79,70 @@ export const AssetCell = memo(function AssetCell({
     onExportDrag(node.path, e.dataTransfer);
   };
 
-  // 상태줄: 컬러 레이어(배경) 위에 S·#·C 버튼이 불투명하게 올라가 컬러 영향 안 받음.
-  // 태그 입력은 키보드 # (선택 카드)로만. # 버튼 클릭은 적용된 태그 목록을 펼쳐 보여줌.
-  const statusBar = (
+  // 좌상단 액션 — S(소스)·C(코멘트). 생성파트와 동일 위치/스타일(card-tl/card-sf/card-cm).
+  //  · 기능은 어셋 고유: S=소스 등록/해제(meta.is_source), C=어셋 코멘트(meta.has_unread). 골드/최종 개념 없음.
+  //  · 평소 숨김(호버 시 표시), S 는 소스이면·C 는 미확인 코멘트면 항상 표시.
+  const topLeft = (
+    <div className="card-tl">
+      <button
+        className={"card-sf" + (meta.is_source ? " on" : "")}
+        title={meta.is_source ? `소스: @${meta.source_name || ""} · 클릭=해제` : "소스로 등록 (s)"}
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          onS(node.path);
+        }}
+      >
+        S
+      </button>
+      <button
+        className={"card-cm" + (meta.has_unread ? " alert" : "")}
+        title={
+          meta.comment_count
+            ? `코멘트 ${meta.comment_count}개${meta.has_unread ? " · 미확인" : ""}`
+            : "코멘트 (c)"
+        }
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          onC(node.path);
+        }}
+      >
+        C
+      </button>
+    </div>
+  );
+
+  // 하단 영역: 태그 인라인 편집(키보드 #) 중에는 입력, 그 외엔 컬러바(생성파트와 동일 크기). 색 없으면 없음.
+  const statusBar = editingTag ? (
     <div
       className="card-status"
-      style={!isList && meta.color ? { background: meta.color + "80" } : undefined}
       onClick={(e) => e.stopPropagation()}
       onMouseDown={(e) => e.stopPropagation()}
       onDoubleClick={(e) => e.stopPropagation()}
     >
-      {editingTag ? (
-        <input
-          className="cs-tag-input"
-          autoFocus
-          placeholder="태그 입력(쉼표) ⏎"
-          onKeyDown={(e) => {
-            e.stopPropagation();
-            if (e.key === "Enter") {
-              const add = (e.target as HTMLInputElement).value
-                .split(",")
-                .map((s) => s.trim())
-                .filter(Boolean);
-              onTagCommit(node.path, add);
-            } else if (e.key === "Escape") {
-              onTagCancel();
-            }
-          }}
-          onBlur={onTagCancel}
-        />
-      ) : (
-        <>
-          <button
-            className={"cs-btn s" + (meta.is_source ? " on" : "")}
-            title={meta.is_source ? `소스: @${meta.source_name || ""} · 클릭=해제` : "소스로 등록 (s)"}
-            onClick={() => onS(node.path)}
-          >
-            S
-          </button>
-          <button
-            className={"cs-btn t" + (meta.tags.length ? " on" : "") + (showTags ? " active" : "")}
-            title={meta.tags.length ? `태그 ${meta.tags.length}개: ${meta.tags.join(", ")}` : "적용된 태그 없음"}
-            onClick={() => setShowTags((v) => !v)}
-          >
-            T
-          </button>
-          <button
-            className={"cs-btn c" + (meta.has_unread ? " on" : "")}
-            title={
-              meta.comment_count
-                ? `코멘트 ${meta.comment_count}개${meta.has_unread ? " · 미확인" : ""}`
-                : "코멘트 (c)"
-            }
-            onClick={() => onC(node.path)}
-          >
-            C
-          </button>
-          {showTags && (
-            <div className="cs-tagpop" onClick={(e) => e.stopPropagation()}>
-              <div className="cs-tagpop-head">
-                <span className="cs-tagpop-title">태그 {meta.tags.length}</span>
-                <button className="cs-tagpop-close" title="닫기 (#)" onClick={() => setShowTags(false)}>
-                  ×
-                </button>
-              </div>
-              <div className="cs-tagpop-body">
-                {meta.tags.length ? (
-                  meta.tags.map((t) => (
-                    <span className="cs-tag-chip" key={t}>
-                      {t}
-                      <button className="cs-tag-x" title="태그 제거" onClick={() => onTagRemove(node.path, t)}>
-                        ×
-                      </button>
-                    </span>
-                  ))
-                ) : (
-                  <span className="cs-tag-empty">태그 없음 · 카드 선택 후 # 키로 추가</span>
-                )}
-              </div>
-            </div>
-          )}
-        </>
-      )}
+      <input
+        className="cs-tag-input"
+        autoFocus
+        placeholder="태그 입력(쉼표) ⏎"
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === "Enter") {
+            const add = (e.target as HTMLInputElement).value
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean);
+            onTagCommit(node.path, add);
+          } else if (e.key === "Escape") {
+            onTagCancel();
+          }
+        }}
+        onBlur={onTagCancel}
+      />
     </div>
-  );
+  ) : !isList && meta.color ? (
+    <div className="card-colorbar" style={{ background: meta.color }} title="컬러 마커" />
+  ) : null;
 
   // 선택/마퀴/키보드는 그리드 컨테이너에서 위임 처리(data-idx 로 식별).
   return (
@@ -207,6 +184,7 @@ export const AssetCell = memo(function AssetCell({
         )}
         {isVideo && <span className="play-badge">▶</span>}
         {isAudio && <span className="play-badge">♪</span>}
+        {topLeft}
 
         <div
           className="thumb-overlay"

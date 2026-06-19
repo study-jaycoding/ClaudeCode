@@ -4,20 +4,17 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { buildPromptParts, refSrc } from "../lib/promptParts";
-import type { InfoTarget, PreviewTarget, Project, Reference } from "../types";
+import type { Generation, InfoTarget, PreviewTarget, Project, Reference } from "../types";
 
 interface Props {
   target: InfoTarget;
   onClose: () => void;
   onPreview: (t: PreviewTarget) => void; // 소스/칩 클릭 → 크게 보기
-  projects?: Project[]; // 프로젝트 목록(귀속 변경 드롭다운용)
-  onSetProject?: (genId: string, projectId: string | null) => void; // 소속 프로젝트 변경
+  projects?: Project[]; // 프로젝트 이름 표시용(목록에서 uuid→이름 매핑)
+  onOpenInBoard?: (g: Generation) => void; // 구성탭에서 원본→파생 트리로 보기
 }
 
 const POP_W = 380;
-
-// 계정(생성자 아이디=로그인 이메일) 캐시 — 정보 팝업 열 때마다 CLI 재호출 방지(거의 안 바뀜).
-let _acctEmailCache: string | null = null;
 
 function clampStart(x: number, y: number) {
   const left = Math.min(Math.max(8, x + 8), window.innerWidth - POP_W - 8);
@@ -75,7 +72,7 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-export function InfoPopup({ target, onClose, onPreview, projects, onSetProject }: Props) {
+export function InfoPopup({ target, onClose, onPreview, projects, onOpenInBoard }: Props) {
   // 레퍼런스(소스) → 크게 보기. 원본(asset 토큰/URL/로컬) 우선, 없으면 썸네일.
   const openSource = (r: Reference) => {
     const url = refSrc(r.file_path) || refSrc(r.thumbnail_path) || refSrc(r.source_url);
@@ -84,14 +81,6 @@ export function InfoPopup({ target, onClose, onPreview, projects, onSetProject }
   const [pos, setPos] = useState(() => clampStart(target.x, target.y));
   const [dim, setDim] = useState<string>("");
   const [credits, setCredits] = useState<number | null>(null);
-  const [creatorId, setCreatorId] = useState<string>(_acctEmailCache || "");
-  // 소속 프로젝트(드롭다운 즉시 반영용 로컬 상태) — target 바뀌면 동기화
-  const [projId, setProjId] = useState<string | null>(
-    target.kind === "generation" ? target.gen.project_id : null,
-  );
-  useEffect(() => {
-    setProjId(target.kind === "generation" ? target.gen.project_id : null);
-  }, [target]);
   const drag = useRef<{ dx: number; dy: number } | null>(null);
 
   useEffect(() => {
@@ -109,18 +98,6 @@ export function InfoPopup({ target, onClose, onPreview, projects, onSetProject }
       .estimateCost(g.model || "", (g.params || {}) as Record<string, unknown>, g.prompt)
       .then((r) => setCredits(r.credits))
       .catch(() => setCredits(null));
-  }, [target]);
-
-  // 생성자 아이디 = 로그인 계정 이메일(캐시). 단독 사용 중엔 내 것이 곧 생성자.
-  useEffect(() => {
-    if (target.kind !== "generation" || _acctEmailCache != null) return;
-    api
-      .account()
-      .then((a) => {
-        _acctEmailCache = a.email || "";
-        setCreatorId(_acctEmailCache);
-      })
-      .catch(() => {});
   }, [target]);
 
   const onDragStart = (e: React.PointerEvent) => {
@@ -166,37 +143,30 @@ export function InfoPopup({ target, onClose, onPreview, projects, onSetProject }
         <Row label="해상도" value={params.resolution as string} />
         <Row label="크레딧" value={credits != null ? `${credits} credits` : "조회 중…"} />
         <Row label="생성일" value={g.created_at} />
-        {onSetProject && (
-          <Row
-            label="프로젝트"
-            value={
-              <select
-                className="info-proj-select"
-                value={projId ?? ""}
-                onChange={(e) => {
-                  const v = e.target.value || null;
-                  setProjId(v);
-                  onSetProject(g.id, v);
-                }}
-              >
-                <option value="">미분류</option>
-                {(projects || []).map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            }
-          />
-        )}
+        {/* 이 생성물이 실제 속한 프로젝트만 표시(전체 목록 드롭다운 제거) */}
+        <Row
+          label="프로젝트"
+          value={
+            g.project_id
+              ? (projects || []).find((p) => p.id === g.project_id)?.name ||
+                g.project_name ||
+                "(이름 없음)" // 내부 식별자(uuid)는 절대 노출하지 않는다
+              : "미분류"
+          }
+        />
         <Row
           label="생성자"
-          value={
-            g.is_mine
-              ? creatorId || g.worker_name || g.worker_id // 내 것 = 로그인 이메일
-              : g.creator_name ||
-                `팀원 · ${(g.creator_uid || "").replace("user_", "").slice(0, 8)}`
-          }
+          // 표시이름만 노출(uid·이메일·worker 식별자는 절대 안 보임). 이름 미정이면 나/팀원.
+          value={g.creator_name || (g.is_mine ? "나" : "팀원")}
+        />
+        {/* 적용된 태그(#) · 전역 태그 — 이 생성물에 붙은 것만 */}
+        <Row
+          label="태그"
+          value={g.tags.length ? g.tags.map((t) => `#${t}`).join("  ") : null}
+        />
+        <Row
+          label="전역 태그"
+          value={g.auto_tags?.length ? g.auto_tags.map((t) => `#${t}`).join("  ") : null}
         />
         <Row label="프롬프트" value={renderPrompt(g.display_prompt, g.prompt, g.references, onPreview)} />
       </>
@@ -284,6 +254,16 @@ export function InfoPopup({ target, onClose, onPreview, projects, onSetProject }
           <span className="info-title" title={title}>
             {target.kind === "generation" ? "ℹ 생성 정보" : "ℹ 파일 정보"}
           </span>
+          {target.kind === "generation" && onOpenInBoard && (
+            <button
+              className="info-board-btn"
+              title="구성탭에서 원본 → 파생 트리로 보기"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => onOpenInBoard(target.gen)}
+            >
+              ⧉ 구성에서 보기
+            </button>
+          )}
           <button className="assets-x" onClick={onClose} title="닫기">
             ✕
           </button>

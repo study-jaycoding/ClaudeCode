@@ -6,8 +6,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import type { GenComment } from "../types";
 
-const ME = "me"; // 현재 작업자(DEFAULT_WORKER_ID). 내 코멘트 판별용
-
 function fmtWhen(s: string): string {
   const d = new Date(s.replace(" ", "T") + "Z");
   if (isNaN(d.getTime())) return s;
@@ -31,19 +29,19 @@ function loadJSON<T>(key: string): T | null {
 interface Props {
   genId: string;
   label: string; // 헤더 표시용(프롬프트 일부 등)
+  myId: string; // 내 신원(로그인 계정 creator_uid, 단독이면 'me') — 내 코멘트 판별용
+  syncTick: number; // WS 'synced' 카운터 — 바뀌면 스레드를 다시 불러온다(새 글·삭제 실시간 반영)
   onClose: () => void;
   onChanged: () => void; // 글 작성/읽음/수정/삭제 후 → 그리드 C 뱃지 갱신용 reload
-  muteOwn: boolean; // 내가 쓴 코멘트는 미확인 알림에서 제외
-  onToggleMute: () => void;
 }
 
 export function GenCommentPanel({
   genId,
   label,
+  myId,
+  syncTick,
   onClose,
   onChanged,
-  muteOwn,
-  onToggleMute,
 }: Props) {
   const [comments, setComments] = useState<GenComment[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -73,25 +71,49 @@ export function GenCommentPanel({
   }, []);
 
   // genId 바뀌면(다른 카드 열기) 스레드 로드 + 읽음 처리 → 뱃지 갱신.
-  const refresh = useCallback(
-    () => api.genComments(genId).then(setComments).catch(() => setComments([])),
-    [genId],
-  );
+  // 캐시(호버 prefetch)가 있으면 즉시 그려 체감 딜레이를 없애고, 서버 재요청으로 최신화.
+  const refresh = useCallback(() => {
+    const cached = api.genCommentsCached(genId);
+    if (cached) setComments(cached);
+    return api
+      .genComments(genId)
+      .then(setComments)
+      .catch(() => {
+        if (!cached) setComments([]);
+      });
+  }, [genId]);
   useEffect(() => {
     setEditingId(null);
     setReplyingId(null);
     refresh();
-    api.markGenCommentsRead(genId).then(onChanged).catch(() => {});
+    // 패널을 열어도 자동 전체 읽음 처리하지 않는다 — 새 코멘트는 NEW 로 표시되고,
+    // 사용자가 그 코멘트를 직접 클릭해 확인해야 seen 처리되어 카드 C 뱃지가 꺼진다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [genId]);
+
+  // WS 'synced'(다른 기기/팀원의 코멘트 추가·삭제) → 열린 스레드를 즉시 다시 불러온다.
+  // 첫 마운트(syncTick=0)는 위 genId 효과가 이미 로드하므로 건너뛴다.
+  useEffect(() => {
+    if (syncTick) refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [syncTick]);
+
+  // NEW 코멘트 한 건 확인(클릭) → 그 행만 seen. 로컬 즉시 반영 + 그리드 뱃지 갱신.
+  const confirmSeen = (c: GenComment) => {
+    if (!c.unread) return;
+    setComments((prev) => prev.map((x) => (x.id === c.id ? { ...x, unread: false } : x)));
+    api
+      .markGenCommentSeen(c.id)
+      .then(onChanged)
+      .catch(() => {});
+  };
 
   const sendComment = (text: string, parentId?: string | null) => {
     const t = text.trim();
     if (!t) return;
     setReplyingId(null);
-    // 작성 시점의 '내 알림 끄기' 상태를 이 코멘트에 캡처(코멘트별).
     api
-      .addGenComment(genId, t, parentId, muteOwn)
+      .addGenComment(genId, t, parentId)
       .then(refresh)
       .then(onChanged)
       .catch(() => {});
@@ -157,12 +179,26 @@ export function GenCommentPanel({
   };
 
   const renderRow = (c: GenComment, isReply: boolean, replyToName: string | null) => {
-    const mine = c.author === ME;
-    const lockedByReply = (cmtByParent[c.id] || []).some((ch) => ch.author !== ME);
+    const mine = c.author === myId;
+    const lockedByReply = (cmtByParent[c.id] || []).some((ch) => ch.author !== myId);
     return (
-      <div key={c.id} className={"cmt-item" + (isReply ? " reply" : "")}>
+      <div
+        key={c.id}
+        className={"cmt-item" + (isReply ? " reply" : "") + (c.unread ? " unread" : "")}
+        title={c.unread ? "클릭해 확인 (새 코멘트)" : undefined}
+        onClick={
+          c.unread
+            ? (e) => {
+                // 답글/수정/삭제 버튼·입력은 그대로 동작, 그 외 영역 클릭 시 확인 처리.
+                if ((e.target as HTMLElement).closest("button, input, form")) return;
+                confirmSeen(c);
+              }
+            : undefined
+        }
+      >
         <div className="cmt-meta">
-          <span className="cmt-author">{c.author_name || c.author}</span>
+          {c.unread && <span className="cmt-new">NEW</span>}
+          <span className="cmt-author">{c.author_name || "팀원"}</span>
           {replyToName && <span className="cmt-replyto">↳ {replyToName}</span>}
           <span className="cmt-when">{fmtWhen(c.created_at)}</span>
           <div className="cmt-acts">
@@ -221,7 +257,7 @@ export function GenCommentPanel({
       {descendantsOf(root.id).map((d) => {
         const parent = d.parent_id ? cmtById[d.parent_id] : undefined;
         const toName =
-          parent && d.parent_id !== root.id ? `${parent.author_name || parent.author}` : null;
+          parent && d.parent_id !== root.id ? `${parent.author_name || "팀원"}` : null;
         return renderRow(d, true, toName);
       })}
     </div>
@@ -265,11 +301,6 @@ export function GenCommentPanel({
         <input name="c" autoComplete="off" placeholder="코멘트 작성 ⏎" autoFocus />
         <button type="submit">전송</button>
       </form>
-
-      <label className="cmt-opt">
-        <input type="checkbox" checked={muteOwn} onChange={onToggleMute} />
-        내가 작성한 코멘트 알림 끄기
-      </label>
     </div>
   );
 }

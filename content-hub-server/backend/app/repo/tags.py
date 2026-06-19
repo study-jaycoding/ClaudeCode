@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from typing import Iterable
+from typing import Iterable, Optional
 
 from ..db import get_connection
 from ._common import new_id
@@ -26,55 +26,82 @@ def _set_tags(conn: sqlite3.Connection, gen_id: str, tags: Iterable[str]) -> Non
     _add_tags(conn, gen_id, tags)
 
 
-# ── 자동 태그(별도 네임스페이스) ──────────────────────────────────────────
-def _get_or_create_auto_tag(conn: sqlite3.Connection, name: str) -> str:
+# ── 자동 태그(전역 태그, 계정별 네임스페이스) ────────────────────────────────
+# auto_tag 는 owner_uid(계정 creator_uid)별로 분리된다 — 같은 이름이라도 계정마다 따로 가진다.
+# 그래서 모든 조회/생성/삭제는 owner 로 스코프하고, 매칭은 NULL(레거시/단독)도 되도록 `IS ?` 를 쓴다.
+def _get_or_create_auto_tag(
+    conn: sqlite3.Connection, name: str, owner_uid: Optional[str]
+) -> str:
     name = name.strip()
-    row = conn.execute("SELECT id FROM auto_tag WHERE name = ?", (name,)).fetchone()
+    row = conn.execute(
+        "SELECT id FROM auto_tag WHERE name = ? AND owner_uid IS ?", (name, owner_uid)
+    ).fetchone()
     if row:
         return row["id"]
     aid = new_id()
-    conn.execute("INSERT INTO auto_tag(id, name) VALUES(?,?)", (aid, name))
+    conn.execute(
+        "INSERT INTO auto_tag(id, name, owner_uid) VALUES(?,?,?)", (aid, name, owner_uid)
+    )
     return aid
 
 
 def _set_auto_tags(conn: sqlite3.Connection, gen_id: str, names: Iterable[str]) -> None:
-    """생성 시 무장된 자동 태그를 결과물에 연결(일반 태그와 완전 분리)."""
+    """생성 시 무장된 자동 태그를 결과물에 연결(일반 태그와 완전 분리).
+    소유자는 그 결과물의 작성자(generation.creator_uid) — 작성자 본인의 전역 태그로 귀속된다."""
+    row = conn.execute(
+        "SELECT creator_uid FROM generation WHERE id=?", (gen_id,)
+    ).fetchone()
+    owner_uid = row["creator_uid"] if row else None
     for name in {t.strip() for t in names if t and t.strip()}:
-        aid = _get_or_create_auto_tag(conn, name)
+        aid = _get_or_create_auto_tag(conn, name, owner_uid)
         conn.execute(
             "INSERT OR IGNORE INTO gen_auto_tag(generation_id, auto_tag_id) VALUES(?,?)",
             (gen_id, aid),
         )
 
 
-def list_auto_tags() -> list[str]:
+def list_auto_tags(owner_uid: Optional[str] = None) -> list[str]:
+    """그 계정(owner_uid)이 소유한 전역 태그 이름들. owner 가 다르면 안 보인다(계정별 격리)."""
     with get_connection() as conn:
-        return [r["name"] for r in conn.execute("SELECT name FROM auto_tag ORDER BY name")]
+        return [
+            r["name"]
+            for r in conn.execute(
+                "SELECT name FROM auto_tag WHERE owner_uid IS ? ORDER BY name", (owner_uid,)
+            )
+        ]
 
 
 def add_auto_tags(gen_id: str, names: Iterable[str]) -> None:
-    """기존 자동태그를 유지한 채 추가(재생성 시 armed 자동태그 적용)."""
+    """기존 자동태그를 유지한 채 추가(재생성 시 armed 자동태그 적용). 소유자는 결과물 작성자."""
     with get_connection() as conn:
         _set_auto_tags(conn, gen_id, names)
 
 
-def create_auto_tag(name: str) -> bool:
-    """자동 태그 추가(+버튼). 이미 있으면 False, 새로 만들면 True."""
+def create_auto_tag(name: str, owner_uid: Optional[str] = None) -> bool:
+    """전역 태그 추가(+버튼) — 그 계정(owner_uid) 네임스페이스에. 같은 계정에 이미 있으면 False.
+    다른 계정이 같은 이름을 갖고 있어도 충돌하지 않는다(계정별 소유)."""
     name = (name or "").strip()
     if not name:
         return False
     with get_connection() as conn:
-        exists = conn.execute("SELECT 1 FROM auto_tag WHERE name=?", (name,)).fetchone()
+        exists = conn.execute(
+            "SELECT 1 FROM auto_tag WHERE name=? AND owner_uid IS ?", (name, owner_uid)
+        ).fetchone()
         if exists:
             return False
-        conn.execute("INSERT INTO auto_tag(id, name) VALUES(?,?)", (new_id(), name))
+        conn.execute(
+            "INSERT INTO auto_tag(id, name, owner_uid) VALUES(?,?,?)",
+            (new_id(), name, owner_uid),
+        )
         return True
 
 
-def delete_auto_tag(name: str) -> int:
-    """자동 태그를 전역 삭제(연결 + 태그 행). 제거된 연결 수 반환."""
+def delete_auto_tag(name: str, owner_uid: Optional[str] = None) -> int:
+    """그 계정 소유의 전역 태그 삭제(연결 + 태그 행). 제거된 연결 수 반환. 남의 태그는 못 지운다."""
     with get_connection() as conn:
-        row = conn.execute("SELECT id FROM auto_tag WHERE name=?", (name,)).fetchone()
+        row = conn.execute(
+            "SELECT id FROM auto_tag WHERE name=? AND owner_uid IS ?", (name, owner_uid)
+        ).fetchone()
         if not row:
             return 0
         aid = row["id"]

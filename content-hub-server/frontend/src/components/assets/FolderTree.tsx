@@ -2,12 +2,15 @@
 import type { AssetNode } from "../../types";
 import { flattenFiles } from "./treeUtils";
 
+type TypeFilter = "image" | "video" | "audio" | null;
+
 export function FolderTree({
   nodes,
   current,
   onSelect,
   expanded,
   onToggle,
+  typeFilter = null,
   depth = 0,
 }: {
   nodes: AssetNode[];
@@ -15,6 +18,7 @@ export function FolderTree({
   onSelect: (p: string) => void;
   expanded: Set<string>;
   onToggle: (p: string) => void;
+  typeFilter?: TypeFilter;
   depth?: number;
 }) {
   return (
@@ -29,6 +33,7 @@ export function FolderTree({
             onSelect={onSelect}
             expanded={expanded}
             onToggle={onToggle}
+            typeFilter={typeFilter}
             depth={depth}
           />
         ))}
@@ -42,6 +47,7 @@ function FolderRow({
   onSelect,
   expanded,
   onToggle,
+  typeFilter,
   depth,
 }: {
   node: AssetNode;
@@ -49,12 +55,16 @@ function FolderRow({
   onSelect: (p: string) => void;
   expanded: Set<string>;
   onToggle: (p: string) => void;
+  typeFilter: TypeFilter;
   depth: number;
 }) {
   const hasSub = (node.children || []).some((c) => c.type === "dir");
   const open = expanded.has(node.path);
   const active = current === node.path;
-  const count = flattenFiles(node.children || []).length; // 폴더 내 전체 미디어 수(재귀)
+  // 폴더 내 미디어 수(재귀) — 타입 모드면 그 타입만 카운트(영상 모드 → 영상 개수)
+  const count = flattenFiles(node.children || []).filter(
+    (f) => !typeFilter || f.type === typeFilter,
+  ).length;
   return (
     <div className="tree-node">
       <div
@@ -83,6 +93,7 @@ function FolderRow({
           onSelect={onSelect}
           expanded={expanded}
           onToggle={onToggle}
+          typeFilter={typeFilter}
           depth={depth + 1}
         />
       )}
