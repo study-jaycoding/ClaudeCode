@@ -114,18 +114,23 @@ def add_asset_comment(
 
 
 def _comment_owner_locked(
-    conn: sqlite3.Connection, comment_id: str, worker_id: str
+    conn: sqlite3.Connection,
+    comment_id: str,
+    worker_id: str,
+    table: str = "asset_comment",
 ) -> tuple[Optional[bool], bool]:
-    """(is_owner, locked) 반환. locked = 다른 사람이 단 답글이 있으면 True."""
+    """(is_owner, locked) 반환. locked = 다른 사람이 단 답글이 있으면 True.
+    에셋·생성본 코멘트가 같은 락 규칙을 쓰므로 테이블명만 바꿔 공용화한다.
+    table 은 'asset_comment' | 'generation_comment' 리터럴만(내부 호출 — 사용자 입력 아님)."""
     row = conn.execute(
-        "SELECT author FROM asset_comment WHERE id=?", (comment_id,)
+        f"SELECT author FROM {table} WHERE id=?", (comment_id,)
     ).fetchone()
     if not row:
         return (None, False)
     is_owner = row["author"] == worker_id
     locked = (
         conn.execute(
-            "SELECT 1 FROM asset_comment WHERE parent_id=? AND author<>? LIMIT 1",
+            f"SELECT 1 FROM {table} WHERE parent_id=? AND author<>? LIMIT 1",
             (comment_id, worker_id),
         ).fetchone()
         is not None
@@ -221,29 +226,11 @@ def add_generation_comment(
     return cid
 
 
-def _gen_comment_owner_locked(
-    conn: sqlite3.Connection, comment_id: str, worker_id: str
-) -> tuple[Optional[bool], bool]:
-    """(is_owner, locked). locked = 다른 사람이 단 답글이 있으면 True(수정·삭제 잠김)."""
-    row = conn.execute(
-        "SELECT author FROM generation_comment WHERE id=?", (comment_id,)
-    ).fetchone()
-    if not row:
-        return (None, False)
-    is_owner = row["author"] == worker_id
-    locked = (
-        conn.execute(
-            "SELECT 1 FROM generation_comment WHERE parent_id=? AND author<>? LIMIT 1",
-            (comment_id, worker_id),
-        ).fetchone()
-        is not None
-    )
-    return (is_owner, locked)
-
-
 def edit_generation_comment(comment_id: str, worker_id: str, text: str) -> None:
     with get_connection() as conn:
-        owner, locked = _gen_comment_owner_locked(conn, comment_id, worker_id)
+        owner, locked = _comment_owner_locked(
+            conn, comment_id, worker_id, "generation_comment"
+        )
         if owner is None:
             raise ValueError("코멘트 없음")
         if not owner:
@@ -257,7 +244,9 @@ def edit_generation_comment(comment_id: str, worker_id: str, text: str) -> None:
 
 def delete_generation_comment(comment_id: str, worker_id: str) -> None:
     with get_connection() as conn:
-        owner, locked = _gen_comment_owner_locked(conn, comment_id, worker_id)
+        owner, locked = _comment_owner_locked(
+            conn, comment_id, worker_id, "generation_comment"
+        )
         if owner is None:
             return
         if not owner:

@@ -343,22 +343,38 @@ def _descendants(conn: sqlite3.Connection, root: str) -> set[str]:
     return out
 
 
-def _derived_depth(conn: sqlite3.Connection, gid: str) -> int:
-    """gid 의 'derived' 조상 수(자기 버전 체인 깊이). 루트=0. 순환 방어."""
-    d = 0
-    seen = {gid}
-    cur = gid
-    while True:
-        row = conn.execute(
-            "SELECT parent_gen_id FROM history WHERE child_gen_id=? AND relation='derived' LIMIT 1",
-            (cur,),
-        ).fetchone()
-        if not row or row["parent_gen_id"] in seen:
-            break
-        cur = row["parent_gen_id"]
-        seen.add(cur)
-        d += 1
-    return d
+def _derived_depth_batch(
+    conn: sqlite3.Connection, ids: list[str]
+) -> dict[str, int]:
+    """각 id 의 'derived' 조상 수(자기 버전 체인 깊이, 루트=0)를 **레벨별 일괄 조회**로 계산.
+    예전엔 id 마다 체인을 따로 while-조회(N+1)했으나, 같은 깊이의 커서를 한 번의 IN 쿼리로
+    묶어 올려 조회 수를 체인 길이(보통 1~5회)로 줄인다. id 별 방문집합으로 순환 방어."""
+    depth = {i: 0 for i in ids}
+    cursor = {i: i for i in ids}  # 각 시작 노드의 현재 체인 끝
+    seen = {i: {i} for i in ids}  # 시작 노드별 방문집합(순환 방어)
+    active = list(dict.fromkeys(ids))  # 중복 제거, 순서 보존
+    while active:
+        cur_ids = list({cursor[i] for i in active})
+        ph = ",".join("?" * len(cur_ids))
+        parent_of = {
+            r["child_gen_id"]: r["parent_gen_id"]
+            for r in conn.execute(
+                f"SELECT child_gen_id, parent_gen_id FROM history "
+                f"WHERE relation='derived' AND child_gen_id IN ({ph})",
+                cur_ids,
+            ).fetchall()
+        }
+        nxt: list[str] = []
+        for i in active:
+            p = parent_of.get(cursor[i])
+            if not p or p in seen[i]:
+                continue
+            cursor[i] = p
+            seen[i].add(p)
+            depth[i] += 1
+            nxt.append(i)
+        active = nxt
+    return depth
 
 
 def add_history_edge(
@@ -1293,8 +1309,8 @@ def get_history(
                     sibling_ids.append(r["gid"])
                     exclude.add(r["gid"])
             sibling_ids = sibling_ids[:24]  # 과도한 목록 방지(상한)
-        # 형제를 깊이별로 묶어 보여주기 위한 각 형제의 'derived' 체인 깊이.
-        sib_depth = {sid: _derived_depth(conn, sid) for sid in sibling_ids}
+        # 형제를 깊이별로 묶어 보여주기 위한 각 형제의 'derived' 체인 깊이(일괄 조회).
+        sib_depth = _derived_depth_batch(conn, sibling_ids)
         gens = _fetch_gens(
             conn,
             [gen_id, *anc_ids, *material_ids, *child_ids, *used_by_ids, *sibling_ids],

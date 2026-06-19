@@ -4,6 +4,7 @@
 //   메인 라인(원본→최신 파생)은 굵게 + 노드에 생성 순번(1,2,3…) 표시.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
+import { thumbOf } from "../lib/media";
 import type { Generation, HistoryGraph, InfoTarget, PreviewTarget } from "../types";
 
 const edgeKey = (parent: string, child: string) => parent + ">" + child;
@@ -39,13 +40,6 @@ const BOXH = 124;
 const GAPX = 78; // 열(세대) 간격
 const GAPY = 26; // 행 간격
 const PAD = 28;
-
-function thumbOf(g: Generation): string | null {
-  const a = g.assets[0];
-  const raw = a?.thumbnail_path || (a?.type !== "video" ? a?.file_path : null) || null;
-  if (!raw) return null;
-  return raw.startsWith("/media/") ? api.genThumbUrl(raw, 256) : raw;
-}
 
 interface Pos {
   col: number;

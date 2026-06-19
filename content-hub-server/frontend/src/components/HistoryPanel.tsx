@@ -4,15 +4,9 @@
 //   이전 카드의 '해제' → 흑백으로 남아 '연결'로 되돌릴 수 있음. 본격 편집은 '구성에서 보기'(보드).
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
+import { thumbOf } from "../lib/media";
 import { HistoryMiniTree } from "./HistoryMiniTree";
 import type { Generation, History, HistoryGraph, InfoTarget, PreviewTarget } from "../types";
-
-function thumbOf(g: Generation): string | null {
-  const a = g.assets[0];
-  const raw = a?.thumbnail_path || (a?.type !== "video" ? a?.file_path : null) || null;
-  if (!raw) return null;
-  return raw.startsWith("/media/") ? api.genThumbUrl(raw, 256) : raw;
-}
 
 function Node({
   g,

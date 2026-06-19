@@ -4,27 +4,9 @@
 // 에셋의 .cmt-* 패널과 같은 CSS·상호작용이되 gen_id 키 + 전용 api 를 쓴다.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
+import { fmtWhen } from "../lib/format";
+import { loadJSON } from "../lib/storage";
 import type { GenComment } from "../types";
-
-function fmtWhen(s: string): string {
-  const d = new Date(s.replace(" ", "T") + "Z");
-  if (isNaN(d.getTime())) return s;
-  return d.toLocaleString("ko-KR", {
-    month: "numeric",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function loadJSON<T>(key: string): T | null {
-  try {
-    const r = localStorage.getItem(key);
-    return r ? (JSON.parse(r) as T) : null;
-  } catch {
-    return null;
-  }
-}
 
 interface Props {
   genId: string;

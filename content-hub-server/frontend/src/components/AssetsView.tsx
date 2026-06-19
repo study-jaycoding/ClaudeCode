@@ -4,6 +4,7 @@
 //  · 좌측 폴더 트리는 유지. 셀 휠클릭=정보, 클릭=미리보기.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
+import { fmtWhen } from "../lib/format";
 import { useT } from "../lib/i18n";
 import { makeStore } from "../lib/storage";
 import { useFloatingPanel } from "../lib/useFloatingPanel";
@@ -24,16 +25,6 @@ const EMPTY_META: AssetMeta = {
   has_unread: false,
 };
 
-function fmtWhen(s: string): string {
-  const d = new Date(s.replace(" ", "T") + "Z");
-  if (isNaN(d.getTime())) return s;
-  return d.toLocaleString("ko-KR", {
-    month: "numeric",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
 // 파일 mtime(epoch 초) → 로컬 날짜 그룹 키 + 표시 라벨("June 11, 2026"). 생성탭과 동일 포맷.
 function dayInfoFromMtime(mtime?: number | null): { key: string; label: string } {
   if (!mtime) return { key: "none", label: "날짜 없음" };

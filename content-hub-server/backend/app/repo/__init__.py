@@ -32,4 +32,4 @@ from .accounts import *  # noqa: F401,F403
 from .identity import _MY_UID_CACHE, ensure_worker, get_setting, set_setting
 from .tags import _add_tags, _set_auto_tags, _set_tags
 from .generations import _attach_children, _delete_generation
-from .share import _find_id_by_job, _merge_comments, _read_share_file, import_bundle_item
+from .share import import_bundle_item

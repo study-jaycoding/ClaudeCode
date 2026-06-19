@@ -2,17 +2,10 @@
 // 썸네일 크기 조절 슬라이더 + List/Grid 레이아웃 토글.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useT } from "../lib/i18n";
+import { loadJSON } from "../lib/storage";
 
 type MediaFilter = "all" | "image" | "video" | "audio";
 
-function loadJSON<T>(key: string): T | null {
-  try {
-    const r = localStorage.getItem(key);
-    return r ? (JSON.parse(r) as T) : null;
-  } catch {
-    return null;
-  }
-}
 const MEDIA_OPTS: { v: MediaFilter; label: string }[] = [
   { v: "all", label: "전체" },
   { v: "image", label: "이미지" },

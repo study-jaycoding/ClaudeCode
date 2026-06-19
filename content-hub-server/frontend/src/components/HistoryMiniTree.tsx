@@ -2,6 +2,7 @@
 // viewBox SVG 라 영역에 맞춰 자동 축소된다. 클릭=크게 보기 · 미들클릭=정보. 편집은 '구성에서 보기'(보드)에서.
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
+import { thumbOf } from "../lib/media";
 import type { Generation, HistoryGraph, InfoTarget, PreviewTarget } from "../types";
 
 // SVG 좌표(유저 단위) — preserveAspectRatio 로 실제 픽셀은 컨테이너에 맞춰 스케일.
@@ -10,13 +11,6 @@ const NH = 84;
 const GX = 46; // 열(세대) 간격
 const GY = 22; // 행 간격(현재 라벨이 위로 들어갈 여유)
 const PAD = 20; // 가장자리 여백(현재 라벨 클립 방지)
-
-function thumbOf(g: Generation): string | null {
-  const a = g.assets[0];
-  const raw = a?.thumbnail_path || (a?.type !== "video" ? a?.file_path : null) || null;
-  if (!raw) return null;
-  return raw.startsWith("/media/") ? api.genThumbUrl(raw, 256) : raw;
-}
 
 export function HistoryMiniTree({
   focusId,
