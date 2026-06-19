@@ -7,7 +7,7 @@ import sqlite3
 from typing import Any, Optional
 
 from ..db import get_connection
-from ._common import new_id
+from ._common import ALERT_COMMENT_JOINS, ALERT_COMMENT_PREDICATE, new_id
 from .identity import resolve_display_names
 
 
@@ -183,17 +183,12 @@ def list_generation_comments(gen_id: str, viewer_uid: str = "") -> list[dict[str
     스레드에 보이되 unread=false(알림 안 울림). 카드 C 뱃지(has_unread)와 동일 규칙이라 항상 일치한다."""
     with get_connection() as conn:
         rows = conn.execute(
-            "SELECT c.id, c.author, w.name AS worker_name, c.text, c.created_at, c.parent_id, "
-            "CASE WHEN s.comment_id IS NULL AND c.author <> ? "
-            "          AND (g.creator_uid = ? OR p.author = ?) "
-            "     THEN 1 ELSE 0 END AS unread "
-            "FROM generation_comment c "
-            "JOIN generation g ON g.id = c.gen_id "
-            "LEFT JOIN worker w ON w.id = c.author "
-            "LEFT JOIN generation_comment p ON p.id = c.parent_id "
-            "LEFT JOIN generation_comment_seen s "
-            "  ON s.worker_id=? AND s.comment_id=c.id "
-            "WHERE c.gen_id=? ORDER BY c.created_at ASC, c.id ASC",
+            f"SELECT c.id, c.author, w.name AS worker_name, c.text, c.created_at, c.parent_id, "
+            f"CASE WHEN {ALERT_COMMENT_PREDICATE} THEN 1 ELSE 0 END AS unread "
+            f"FROM generation_comment c "
+            f"{ALERT_COMMENT_JOINS} "
+            f"LEFT JOIN worker w ON w.id = c.author "
+            f"WHERE c.gen_id=? ORDER BY c.created_at ASC, c.id ASC",
             (viewer_uid, viewer_uid, viewer_uid, viewer_uid, gen_id),
         ).fetchall()
         out = _name_comments(conn, rows)

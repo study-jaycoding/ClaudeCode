@@ -10,7 +10,12 @@ from typing import Any, Iterable, Optional
 from ..config import DEFAULT_WORKER_ID
 from ..db import get_connection
 from . import identity, tags
-from ._common import _cached_or_remote, new_id
+from ._common import (
+    ALERT_COMMENT_JOINS,
+    ALERT_COMMENT_PREDICATE,
+    _cached_or_remote,
+    new_id,
+)
 
 # FTS5(generation_fts) 존재 여부 — 검색 경로 선택용. 1회 확인 후 메모이즈.
 _FTS_READY: Optional[bool] = None
@@ -942,14 +947,8 @@ def _attach_children(
     cviewer = viewer_uid if viewer_uid is not None else viewer_id
     for r in conn.execute(
         f"SELECT DISTINCT c.gen_id FROM generation_comment c "
-        f"JOIN generation g ON g.id = c.gen_id "
-        f"LEFT JOIN generation_comment p ON p.id = c.parent_id "
-        f"LEFT JOIN generation_comment_seen s "
-        f"ON s.worker_id=? AND s.comment_id=c.id "
-        f"WHERE c.gen_id IN ({placeholders}) "
-        f"AND s.comment_id IS NULL "
-        f"AND c.author <> ? "
-        f"AND (g.creator_uid = ? OR p.author = ?)",
+        f"{ALERT_COMMENT_JOINS} "
+        f"WHERE c.gen_id IN ({placeholders}) AND {ALERT_COMMENT_PREDICATE}",
         [cviewer, *ids, cviewer, cviewer, cviewer],
     ).fetchall():
         by_id[r["gen_id"]]["has_unread"] = True
@@ -1163,14 +1162,9 @@ def generation_stats(viewer_id: str = DEFAULT_WORKER_ID) -> dict[str, Any]:
             "WHERE status NOT IN ('done','pending','running') AND deleted_at IS NULL"
         ).fetchone()[0]
         unread = conn.execute(
-            "SELECT EXISTS (SELECT 1 FROM generation_comment c "
-            "JOIN generation g ON g.id = c.gen_id "
-            "LEFT JOIN generation_comment p ON p.id = c.parent_id "
-            "LEFT JOIN generation_comment_seen s "
-            "ON s.worker_id=? AND s.comment_id=c.id "
-            "WHERE s.comment_id IS NULL "
-            "AND c.author <> ? "
-            "AND (g.creator_uid = ? OR p.author = ?))",
+            f"SELECT EXISTS (SELECT 1 FROM generation_comment c "
+            f"{ALERT_COMMENT_JOINS} "
+            f"WHERE {ALERT_COMMENT_PREDICATE})",
             (viewer_id, viewer_id, viewer_id, viewer_id),
         ).fetchone()[0]
     return {"failed_count": int(failed), "has_unread": bool(unread)}

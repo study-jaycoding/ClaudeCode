@@ -6,7 +6,10 @@
 import { useRef, useState } from "react";
 import { api } from "../api";
 import type { Generation, InfoTarget, PreviewTarget } from "../types";
+import { download, downloadName } from "../lib/download";
 import { buildPromptParts, refSrc } from "../lib/promptParts";
+import { useClickSeparation } from "../lib/useClickSeparation";
+import { MediaThumbnail } from "./MediaThumbnail";
 
 const ME = "me"; // 현재 작업자(DEFAULT_WORKER_ID) — 팀 탭에서 내 것/남의 것 구분
 
@@ -89,40 +92,35 @@ export function GenerationCard({
   // v02 CMS — S 더블클릭 → 최종(골드) 확인 플로팅. 단일클릭(공유 토글)과 충돌 방지용 타이머.
   const [confirmFinal, setConfirmFinal] = useState(false);
   const [confirmShare, setConfirmShare] = useState(false); // S 단일클릭 → 공유/해제 확인(최종과 동일 UX)
-  const sClickTimer = useRef<number | null>(null);
+  const sClick = useClickSeparation(220); // 단일(공유)/더블(최종) 분리
   const onSClick = () => {
     if (!gen.is_mine) return; // 공유/해제는 본인 생성물만 — 다른 사람은 S 를 눌러도 무반응
-    if (sClickTimer.current) return; // 더블클릭 처리 중
-    sClickTimer.current = window.setTimeout(() => {
-      sClickTimer.current = null;
+    sClick.onClick(() => {
       if (gen.is_final) return; // 최종(골드)은 공유 잠금 — 해제는 더블클릭으로만
       setConfirmShare(true); // 즉시 토글하지 않고 확인 플로팅을 띄운다("공유 하시겠습니까?")
-    }, 220);
+    });
   };
   const confirmShareYes = () => {
     setConfirmShare(false);
     gen.shared ? onUnpublish(gen) : onPublish(gen);
   };
-  const onSDouble = () => {
-    if (sClickTimer.current) {
-      clearTimeout(sClickTimer.current);
-      sClickTimer.current = null;
-    }
-    setConfirmShare(false); // 더블클릭(최종)이면 공유 확인은 닫는다
-    // 최종(골드) 지정/해제는 그 프로젝트 supervisor/PM 만 — 권한 없으면 확인창을 띄우지 않는다.
-    const mayFinalize = canFinalize ? canFinalize(gen) : true;
-    if (!mayFinalize) {
-      // 권한 없음: 본인 미공유면 더블클릭으로 공유만 켜고, 그 외엔 무반응.
-      if (gen.is_mine && !gen.shared && !gen.is_final) onPublish(gen);
-      return;
-    }
-    // 최종 지정/해제는 S 활성(공유)된 상태에서만. 비활성이면 더블클릭은 공유만 켠다.
-    if (gen.shared || gen.is_final) {
-      setConfirmFinal(true);
-    } else {
-      onPublish(gen);
-    }
-  };
+  const onSDouble = () =>
+    sClick.onDouble(() => {
+      setConfirmShare(false); // 더블클릭(최종)이면 공유 확인은 닫는다
+      // 최종(골드) 지정/해제는 그 프로젝트 supervisor/PM 만 — 권한 없으면 확인창을 띄우지 않는다.
+      const mayFinalize = canFinalize ? canFinalize(gen) : true;
+      if (!mayFinalize) {
+        // 권한 없음: 본인 미공유면 더블클릭으로 공유만 켜고, 그 외엔 무반응.
+        if (gen.is_mine && !gen.shared && !gen.is_final) onPublish(gen);
+        return;
+      }
+      // 최종 지정/해제는 S 활성(공유)된 상태에서만. 비활성이면 더블클릭은 공유만 켠다.
+      if (gen.shared || gen.is_final) {
+        setConfirmFinal(true);
+      } else {
+        onPublish(gen);
+      }
+    });
   const confirmFinalYes = () => {
     setConfirmFinal(false);
     gen.is_final ? onUnfinalize(gen) : onFinalize(gen);
@@ -173,44 +171,35 @@ export function GenerationCard({
         }
       }}
     >
-      {thumb && isVideo ? (
-        // 영상: 포스터(썸네일) 위에 호버 시 재생할 video 를 올려둠
-        <video
-          ref={videoRef}
-          src={asset!.file_path}
-          poster={thumb}
-          muted
-          loop
-          playsInline
-          preload="none"
-          draggable={false}
-        />
-      ) : thumb ? (
-        <img src={thumb} loading="lazy" decoding="async" alt={gen.prompt} draggable={false} />
-      ) : isVideo && asset ? (
-        <video ref={videoRef} src={asset.file_path} muted loop playsInline preload="metadata" draggable={false} />
-      ) : (
-        <div
-          className={`thumb-placeholder status-${gen.status}`}
-          title={
-            gen.status === "failed" && gen.error
-              ? gen.error
-              : gen.status === "pending" || gen.status === "running"
-                ? LOCAL_EXEC_HINT
-                : undefined
-          }
-        >
-          {gen.status === "running" ? (
-            // 생성중 — 글씨 대신 스피너 아이콘으로 표현(작은 캡션만 보조).
-            <span className="gen-generating">
-              <span className="gen-spinner" aria-hidden />
-              <span className="gen-generating-label">Generating</span>
-            </span>
-          ) : (
-            STATUS_LABEL[gen.status] || gen.status
-          )}
-        </div>
-      )}
+      <MediaThumbnail
+        thumb={thumb}
+        isVideo={isVideo}
+        src={asset?.file_path}
+        alt={gen.prompt}
+        videoRef={videoRef}
+        fallback={
+          <div
+            className={`thumb-placeholder status-${gen.status}`}
+            title={
+              gen.status === "failed" && gen.error
+                ? gen.error
+                : gen.status === "pending" || gen.status === "running"
+                  ? LOCAL_EXEC_HINT
+                  : undefined
+            }
+          >
+            {gen.status === "running" ? (
+              // 생성중 — 글씨 대신 스피너 아이콘으로 표현(작은 캡션만 보조).
+              <span className="gen-generating">
+                <span className="gen-spinner" aria-hidden />
+                <span className="gen-generating-label">Generating</span>
+              </span>
+            ) : (
+              STATUS_LABEL[gen.status] || gen.status
+            )}
+          </div>
+        }
+      />
 
       {gen.is_source && (
         <span className="source-badge" title="소스로 등록됨">
@@ -571,28 +560,6 @@ export function GenerationCard({
 }
 
 // ── 헬퍼 ──
-function download(url: string, name: string) {
-  const a = document.createElement("a");
-  a.href = url;
-  if (url.startsWith("/")) {
-    // 로컬 보관본(같은 출처) → 실제 파일 다운로드
-    a.download = name;
-  } else {
-    // 원격 URL → 다운로드 속성이 무시되므로 새 탭으로(앱 이탈 방지)
-    a.target = "_blank";
-    a.rel = "noopener";
-  }
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-}
-
-function downloadName(gen: Generation, type: string): string {
-  const base = (gen.prompt || gen.id).slice(0, 40).replace(/[\\/:*?"<>|]+/g, "_").trim();
-  const ext = type === "video" ? "mp4" : "png";
-  return `${base || gen.id}.${ext}`;
-}
-
 // "seedance_2_0" → "Seedance 2.0", "seedance_2_0_fast" → "Seedance 2.0 Fast"
 function modelLabel(m: string | null): string {
   if (!m) return "—";

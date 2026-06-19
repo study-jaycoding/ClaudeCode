@@ -4,6 +4,7 @@
 //  · 좌측 폴더 트리는 유지. 셀 휠클릭=정보, 클릭=미리보기.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
+import { buildCommentTree } from "../lib/commentTree";
 import { fmtWhen } from "../lib/format";
 import { useT } from "../lib/i18n";
 import { makeStore } from "../lib/storage";
@@ -347,22 +348,13 @@ export function AssetsView({ onInfo, onPreview }: Props) {
     return [...s].sort((a, b) => a.localeCompare(b));
   }, [meta]);
 
-  // 코멘트 트리(부모 → 답글)
-  const cmtByParent = useMemo(() => {
-    const m: Record<string, AssetComment[]> = {};
-    for (const c of comments) (m[c.parent_id || ""] ||= []).push(c);
-    return m;
-  }, [comments]);
-  const cmtById = useMemo(() => {
-    const m: Record<string, AssetComment> = {};
-    for (const c of comments) m[c.id] = c;
-    return m;
-  }, [comments]);
-  const cmtRoots = useMemo(() => {
-    const ids = new Set(comments.map((c) => c.id));
-    // 최상위 코멘트는 최신이 위로(답글은 한 단계로 평탄화해 시간순)
-    return comments.filter((c) => !c.parent_id || !ids.has(c.parent_id)).slice().reverse();
-  }, [comments]);
+  // 코멘트 트리(부모 → 답글) — 계산은 공용 유틸, 변수명은 기존 그대로 받아 렌더 코드 무변경.
+  const {
+    byParent: cmtByParent,
+    byId: cmtById,
+    roots: cmtRoots,
+    descendantsOf,
+  } = useMemo(() => buildCommentTree(comments), [comments]);
 
   const breadcrumb = dir ? dir.split("/") : [];
 
@@ -949,20 +941,6 @@ export function AssetsView({ onInfo, onPreview }: Props) {
     return out;
   };
 
-  // 한 루트의 모든 하위 답글을 평탄화(시간순) — 들여쓰기는 1단계로 고정.
-  const descendantsOf = (rootId: string): AssetComment[] => {
-    const out: AssetComment[] = [];
-    const collect = (pid: string) => {
-      for (const k of cmtByParent[pid] || []) {
-        out.push(k);
-        collect(k.id);
-      }
-    };
-    collect(rootId);
-    return out.sort((a, b) =>
-      a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : a.id < b.id ? -1 : 1,
-    );
-  };
 
   // 코멘트 한 줄. 내 코멘트는 수정/삭제(단 남이 답글 달면 잠김). isReply 면 1단 들여쓰기.
   const renderRow = (c: AssetComment, isReply: boolean, replyToName: string | null) => {

@@ -2,6 +2,7 @@
 // 핸들러는 path 인자를 받는 안정 참조로만 받아 React.memo 가 변화 없는 셀을 건너뛴다.
 import { memo, useRef } from "react";
 import { api } from "../../api";
+import { download } from "../../lib/download";
 import type { AssetMeta, AssetNode, InfoTarget } from "../../types";
 
 export const AssetCell = memo(function AssetCell({
@@ -240,15 +241,3 @@ export const AssetCell = memo(function AssetCell({
 });
 
 // 다운로드: 로컬 서빙 URL 은 download 속성, 외부 URL 은 새 탭.
-function download(url: string, name: string) {
-  const a = document.createElement("a");
-  a.href = url;
-  if (url.startsWith("/")) a.download = name;
-  else {
-    a.target = "_blank";
-    a.rel = "noopener";
-  }
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-}

@@ -4,7 +4,10 @@
 //   메인 라인(원본→최신 파생)은 굵게 + 노드에 생성 순번(1,2,3…) 표시.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
+import { download, downloadName } from "../lib/download";
 import { thumbOf } from "../lib/media";
+import { useClickSeparation } from "../lib/useClickSeparation";
+import { MediaThumbnail } from "./MediaThumbnail";
 import type { Generation, HistoryGraph, InfoTarget, PreviewTarget } from "../types";
 
 const edgeKey = (parent: string, child: string) => parent + ">" + child;
@@ -109,30 +112,25 @@ export function HistoryBoard({
   selectedRef.current = selected;
   // S 버튼 확인 플로팅(공유/해제 단일클릭 · 최종 더블클릭) — 보드 단위 1개만 열림.
   const [sConfirm, setSConfirm] = useState<{ id: string; kind: "share" | "final" } | null>(null);
-  const sTimerRef = useRef<number | null>(null);
+  const sClick = useClickSeparation(220); // 단일(공유)/더블(최종) 분리
   const onNodeSClick = (g: Generation) => {
     if (!g.is_mine) return; // 공유/해제는 본인 것만
-    if (sTimerRef.current) return; // 더블클릭 처리 중
-    sTimerRef.current = window.setTimeout(() => {
-      sTimerRef.current = null;
+    sClick.onClick(() => {
       if (g.is_final) return; // 최종(골드)은 공유 잠금 — 해제는 더블클릭으로만
       setSConfirm({ id: g.id, kind: "share" });
-    }, 220);
+    });
   };
-  const onNodeSDouble = (g: Generation) => {
-    if (sTimerRef.current) {
-      clearTimeout(sTimerRef.current);
-      sTimerRef.current = null;
-    }
-    const may = canFinalize ? canFinalize(g) : true;
-    if (!may) {
-      if (g.is_mine && !g.shared && !g.is_final) onPublish(g); // 권한 없으면 공유만
-      return;
-    }
-    // 최종 지정/해제는 공유(S 활성) 상태에서만. 비활성이면 더블클릭은 공유만 켠다.
-    if (g.shared || g.is_final) setSConfirm({ id: g.id, kind: "final" });
-    else onPublish(g);
-  };
+  const onNodeSDouble = (g: Generation) =>
+    sClick.onDouble(() => {
+      const may = canFinalize ? canFinalize(g) : true;
+      if (!may) {
+        if (g.is_mine && !g.shared && !g.is_final) onPublish(g); // 권한 없으면 공유만
+        return;
+      }
+      // 최종 지정/해제는 공유(S 활성) 상태에서만. 비활성이면 더블클릭은 공유만 켠다.
+      if (g.shared || g.is_final) setSConfirm({ id: g.id, kind: "final" });
+      else onPublish(g);
+    });
   const onNodeSConfirmYes = (g: Generation) => {
     const c = sConfirm;
     setSConfirm(null);
@@ -812,25 +810,12 @@ export function HistoryBoard({
                   }}
                   onMouseDown={(e) => e.button === 1 && e.preventDefault()}
                 >
-                  {thumb && a?.type === "video" ? (
-                    // 영상(썸네일 있음): 포스터로 깔고 호버 시 재생(onMouseEnter 가 video.play)
-                    <video
-                      src={a.file_path}
-                      poster={thumb}
-                      muted
-                      loop
-                      playsInline
-                      preload="none"
-                      draggable={false}
-                    />
-                  ) : thumb ? (
-                    <img src={thumb} alt="" draggable={false} />
-                  ) : a?.type === "video" ? (
-                    // 영상(썸네일 없음): 첫 프레임을 메타데이터로 띄워 'done' 대신 내용이 보이게
-                    <video src={a.file_path} muted loop playsInline preload="metadata" draggable={false} />
-                  ) : (
-                    <span className={"linb-ph status-" + g.status}>{g.status}</span>
-                  )}
+                  <MediaThumbnail
+                    thumb={thumb}
+                    isVideo={a?.type === "video"}
+                    src={a?.file_path}
+                    fallback={<span className={"linb-ph status-" + g.status}>{g.status}</span>}
+                  />
                   {a?.type === "video" && <span className="linb-vid">▶</span>}
                   {isRoot && <span className="linb-tag root-tag">원본</span>}
                   {/* 생성 순번 숫자 뱃지 제거 — 그래프 연결로 히스토리를 확인할 수 있어 불필요. */}
@@ -956,23 +941,3 @@ export function HistoryBoard({
   );
 }
 
-// ── 다운로드 헬퍼(그리드 카드와 동일) ──
-function download(url: string, name: string) {
-  const a = document.createElement("a");
-  a.href = url;
-  if (url.startsWith("/")) {
-    a.download = name; // 로컬 보관본 → 실제 파일 다운로드
-  } else {
-    a.target = "_blank"; // 원격 URL → 새 탭(앱 이탈 방지)
-    a.rel = "noopener";
-  }
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-}
-
-function downloadName(gen: Generation, type: string): string {
-  const base = (gen.prompt || gen.id).slice(0, 40).replace(/[\\/:*?"<>|]+/g, "_").trim();
-  const ext = type === "video" ? "mp4" : "png";
-  return `${base || gen.id}.${ext}`;
-}

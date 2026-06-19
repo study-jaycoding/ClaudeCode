@@ -4,6 +4,7 @@
 // 에셋의 .cmt-* 패널과 같은 CSS·상호작용이되 gen_id 키 + 전용 api 를 쓴다.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
+import { buildCommentTree } from "../lib/commentTree";
 import { fmtWhen } from "../lib/format";
 import { loadJSON } from "../lib/storage";
 import type { GenComment } from "../types";
@@ -129,36 +130,13 @@ export function GenCommentPanel({
     window.addEventListener("mouseup", onDragUp);
   };
 
-  // 코멘트 트리(부모 → 답글)
-  const cmtByParent = useMemo(() => {
-    const m: Record<string, GenComment[]> = {};
-    for (const c of comments) (m[c.parent_id || ""] ||= []).push(c);
-    return m;
-  }, [comments]);
-  const cmtById = useMemo(() => {
-    const m: Record<string, GenComment> = {};
-    for (const c of comments) m[c.id] = c;
-    return m;
-  }, [comments]);
-  const cmtRoots = useMemo(() => {
-    const ids = new Set(comments.map((c) => c.id));
-    return comments.filter((c) => !c.parent_id || !ids.has(c.parent_id)).slice().reverse();
-  }, [comments]);
-
-  // 한 루트의 하위 답글을 평탄화(시간순) — 들여쓰기 1단계 고정.
-  const descendantsOf = (rootId: string): GenComment[] => {
-    const out: GenComment[] = [];
-    const collect = (pid: string) => {
-      for (const k of cmtByParent[pid] || []) {
-        out.push(k);
-        collect(k.id);
-      }
-    };
-    collect(rootId);
-    return out.sort((a, b) =>
-      a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : a.id < b.id ? -1 : 1,
-    );
-  };
+  // 코멘트 트리(부모 → 답글) — 계산은 공용 유틸, 변수명은 기존 그대로 받아 렌더 코드 무변경.
+  const {
+    byParent: cmtByParent,
+    byId: cmtById,
+    roots: cmtRoots,
+    descendantsOf,
+  } = useMemo(() => buildCommentTree(comments), [comments]);
 
   const renderRow = (c: GenComment, isReply: boolean, replyToName: string | null) => {
     const mine = c.author === myId;

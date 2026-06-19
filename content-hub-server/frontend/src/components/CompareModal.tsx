@@ -34,10 +34,14 @@ function commonTokens(prompts: string[]): Set<string> {
 }
 
 // <<<...>>> 엘리먼트(입력 요소 참조) 1개와 정확히 일치.
-const ELEMENT_RE = /^<{2,}[^<>]*>{2,}$/;
+// 엘리먼트 토큰 패턴(<<<x>>> 형태). 판정·추출·split 세 변형을 한 소스에서 파생해 서로 어긋나지 않게.
+const ELEMENT_SRC = "<{2,}[^<>]*>{2,}";
+const ELEMENT_RE = new RegExp(`^${ELEMENT_SRC}$`); // 단일 토큰 판정(.test)
+const ELEMENT_RE_G = new RegExp(ELEMENT_SRC, "g"); // 전체 추출(.match)
+const ELEMENT_SPLIT_RE = new RegExp(`(${ELEMENT_SRC})`); // split 캡처(엘리먼트만 분리)
 
 function extractElements(text: string): string[] {
-  return text.match(/<{2,}[^<>]*>{2,}/g) || [];
+  return text.match(ELEMENT_RE_G) || [];
 }
 
 // 모든 버전에 공통으로 든 엘리먼트(소문자) — 여기 없는 엘리먼트가 '바뀐 엘리먼트'.
@@ -53,7 +57,7 @@ function commonElements(prompts: string[]): Set<string> {
 
 // 프롬프트 렌더 — '바뀐' 것만 강조: 바뀐 엘리먼트<<<>>>는 녹색, 그 외 바뀐 단어는 노란색.
 function renderPrompt(text: string, common: Set<string>, commonElems: Set<string>) {
-  const parts = text.split(/(<{2,}[^<>]*>{2,})/);
+  const parts = text.split(ELEMENT_SPLIT_RE);
   return parts.map((part, pi) => {
     if (!part) return null;
     if (ELEMENT_RE.test(part)) {

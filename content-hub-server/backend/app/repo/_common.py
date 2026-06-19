@@ -20,6 +20,24 @@ def new_id() -> str:
     return str(uuid.uuid4())
 
 
+# ── 생성본 코멘트 '미확인 알림' 공통 SQL 조각 ─────────────────────────────
+# 카드 C 뱃지(_attach_children)·전역 통계(generation_stats)·패널 NEW(list_generation_comments)가
+# 똑같은 알림 규칙을 쓰도록 한곳에서 관리한다. 규칙을 바꾸면 세 경로가 자동으로 일치한다.
+# 별칭 전제: c=generation_comment, g=generation, p=부모 코멘트, s=seen.
+#   ALERT_COMMENT_JOINS     : c 뒤에 붙이는 JOIN 3종. ? 1개(s.worker_id=뷰어).
+#   ALERT_COMMENT_PREDICATE : 알림 대상 판정. ? 3개(c.author<>뷰어, g.creator_uid=뷰어, p.author=뷰어).
+# 바인딩은 위치식(?)이라 최종 SQL 에서 ? 가 나타나는 텍스트 순서대로 인자를 넘겨야 한다
+# (예: WHERE 경로는 JOIN ? → 예측부 3?, SELECT-CASE 경로는 예측부 3? → JOIN ?).
+ALERT_COMMENT_JOINS = (
+    "JOIN generation g ON g.id = c.gen_id "
+    "LEFT JOIN generation_comment p ON p.id = c.parent_id "
+    "LEFT JOIN generation_comment_seen s ON s.worker_id=? AND s.comment_id=c.id"
+)
+ALERT_COMMENT_PREDICATE = (
+    "s.comment_id IS NULL AND c.author <> ? AND (g.creator_uid = ? OR p.author = ?)"
+)
+
+
 # ── 생성자(팀 워크스페이스 작성자) ────────────────────────────────────────
 _UID_RE = re.compile(r"(user_[A-Za-z0-9]+)")
 

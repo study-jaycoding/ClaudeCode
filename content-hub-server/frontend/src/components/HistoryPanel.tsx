@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { thumbOf } from "../lib/media";
 import { HistoryMiniTree } from "./HistoryMiniTree";
+import { MediaThumbnail } from "./MediaThumbnail";
 import type { Generation, History, HistoryGraph, InfoTarget, PreviewTarget } from "../types";
 
 function Node({
@@ -82,16 +83,12 @@ function Node({
             onPreview({ url: a.file_path, type: a.type, name: g.prompt.slice(0, 50), genId: g.id });
         }}
       >
-        {thumb && a?.type === "video" ? (
-          <video src={a.file_path} poster={thumb} muted loop playsInline preload="none" draggable={false} />
-        ) : thumb ? (
-          <img src={thumb} alt="" draggable={false} />
-        ) : a?.type === "video" ? (
-          // 영상(썸네일 없음): 첫 프레임을 메타데이터로 띄워 'done' 대신 내용이 보이게
-          <video src={a.file_path} muted loop playsInline preload="metadata" draggable={false} />
-        ) : (
-          <span className={"lin-thumb-ph status-" + g.status}>{g.status}</span>
-        )}
+        <MediaThumbnail
+          thumb={thumb}
+          isVideo={a?.type === "video"}
+          src={a?.file_path}
+          fallback={<span className={"lin-thumb-ph status-" + g.status}>{g.status}</span>}
+        />
         {seq != null && <span className="lin-seq">{seq}</span>}
         {a?.type === "video" && <span className="lin-vid">▶</span>}
         {g.is_final && <span className="lin-final">★</span>}
