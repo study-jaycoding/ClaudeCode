@@ -1,6 +1,7 @@
 // 설정 — AccountMenu의 "⚙ 설정"으로 열리는 플로팅 창(ManageAccount 와 같은 패턴).
 //  · 강조색 팔레트(프리셋 → CSS 변수 즉시 적용·영속)
 //  · 언어 한글/English (선택 영속 — 전체 번역은 단계 적용)
+//  · 단축키(변경은 별도 플로팅 창 ShortcutsWindow)
 //  · 생성물 전체 가져오기(지금 동기화 = 최신 100. 100 밖은 MCP backfill 안내)
 import { useEffect, useState } from "react";
 import {
@@ -13,6 +14,7 @@ import {
   type Lang,
 } from "../lib/theme";
 import { setLang, useT } from "../lib/i18n";
+import { ShortcutsWindow } from "./ShortcutsWindow";
 import type { Account } from "../types";
 
 export function SettingsPanel({
@@ -33,6 +35,7 @@ export function SettingsPanel({
   const [reduceMotion, setReduceMotion] = useState(loadReduceMotion());
   const [copied, setCopied] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [scOpen, setScOpen] = useState(false); // 단축키 변경 플로팅 창
 
   // 내 PC에서 에이전트를 띄울 실행 명령(서버=지금 접속한 주소, 이메일=로그인 계정).
   const agentCmd = `python push_agent.py --server ${window.location.origin} --email ${
@@ -86,38 +89,6 @@ export function SettingsPanel({
         </header>
 
         <div className="admin-body">
-          {/* 내 힉스필드 연결 — 원클릭 run-agent.bat(자동으로 push_agent.py 받아 실행) */}
-          <section className="settings-section">
-            <h4>{t("내 힉스필드 연결 (에이전트)")}</h4>
-            <p className="settings-hint">
-              내 PC에서 만든 힉스필드 작업을 허브로 올리고, 허브의 생성·재생성을 내 로컬 CLI로
-              실행하려면 이 에이전트를 <b>내 PC에서</b> 띄워두세요. (힉스필드 CLI 설치 +{" "}
-              <code>higgsfield auth login</code> + 파이썬 필요)
-            </p>
-            <a className="settings-action" href="/api/agent/run-bat" download="run-agent.bat">
-              ⬇ run-agent.bat 받기 (Windows · 원클릭)
-            </a>
-            <p className="settings-hint">
-              받아서 <b>더블클릭</b> → (실행 때마다 <b>최신 push_agent.py 자동 다운로드</b>) → 허브
-              비밀번호 입력 → 켜두면 내가 <b>생성·재생성·'내 작업 올리기'</b>를 할 때 즉시 작동(이벤트
-              방식, 30초 폴링 없음). 창을 닫으면 멈춥니다.
-            </p>
-
-            {/* 폴백 — Mac/Linux·고급: 스크립트 직접 받기 + 명령 복사 */}
-            <details className="agent-adv">
-              <summary>Mac/Linux · 직접 실행</summary>
-              <a className="settings-action" href="/api/agent/download" download="push_agent.py">
-                ⬇ push_agent.py 직접 받기
-              </a>
-              <div className="agent-cmd">
-                <code>{agentCmd}</code>
-                <button className="agent-copy" onClick={copyCmd} title="명령 복사">
-                  {copied ? "✓ 복사됨" : "복사"}
-                </button>
-              </div>
-            </details>
-          </section>
-
           {/* 강조색 팔레트 */}
           <section className="settings-section">
             <h4>{t("강조색")}</h4>
@@ -150,6 +121,22 @@ export function SettingsPanel({
             <p className="settings-hint">{t("선택 즉시 적용되고 다음 접속에도 유지됩니다.")}</p>
           </section>
 
+          {/* 언어 — 강조색 바로 아래 */}
+          <section className="settings-section">
+            <h4>{t("언어 · Language")}</h4>
+            <div className="lang-toggle">
+              <button className={lang === "ko" ? "on" : ""} onClick={() => pickLang("ko")}>
+                한글
+              </button>
+              <button className={lang === "en" ? "on" : ""} onClick={() => pickLang("en")}>
+                English
+              </button>
+            </div>
+            <p className="settings-hint">
+              {t("선택은 저장됩니다. 영어 UI 번역은 순차 적용 예정입니다.")}
+            </p>
+          </section>
+
           {/* 모션(애니메이션) */}
           <section className="settings-section">
             <h4>{t("모션")}</h4>
@@ -169,21 +156,47 @@ export function SettingsPanel({
             </p>
           </section>
 
-
-          {/* 언어 */}
+          {/* 단축키 — 변경은 별도 플로팅 창으로 */}
           <section className="settings-section">
-            <h4>{t("언어 · Language")}</h4>
-            <div className="lang-toggle">
-              <button className={lang === "ko" ? "on" : ""} onClick={() => pickLang("ko")}>
-                한글
-              </button>
-              <button className={lang === "en" ? "on" : ""} onClick={() => pickLang("en")}>
-                English
-              </button>
-            </div>
+            <h4>{t("단축키")}</h4>
+            <button className="settings-action" onClick={() => setScOpen(true)}>
+              ⌨ {t("단축키 설정")}
+            </button>
             <p className="settings-hint">
-              {t("선택은 저장됩니다. 영어 UI 번역은 순차 적용 예정입니다.")}
+              {t("지정된 단축키를 보고 원하는 키로 바꿀 수 있습니다.")}
             </p>
+          </section>
+
+          {/* 내 힉스필드 연결 — 단축키 아래, 전체 가져오기 위 */}
+          <section className="settings-section">
+            <h4>{t("내 힉스필드 연결 (에이전트)")}</h4>
+            <p className="settings-hint">
+              내 PC에서 만든 힉스필드 작업을 허브로 올리고, 허브의 생성·재생성을 내 로컬 CLI로
+              실행하려면 이 에이전트를 <b>내 PC에서</b> 띄워두세요. (힉스필드 CLI 설치 +{" "}
+              <code>higgsfield auth login</code> + 파이썬 필요)
+            </p>
+            <a className="settings-action" href="/api/agent/run-bat" download="run-agent.bat">
+              ⬇ run-agent.bat 받기 (Windows · 원클릭)
+            </a>
+            <p className="settings-hint">
+              받아서 <b>더블클릭</b> → (실행 때마다 <b>최신 push_agent.py 자동 다운로드</b>) → 허브
+              비밀번호 입력 → 켜두면 내가 <b>생성·재생성·'내 작업 올리기'</b>를 할 때 즉시 작동(이벤트
+              방식, 30초 폴링 없음). 창을 닫으면 멈춥니다.
+            </p>
+
+            {/* 폴백 — Mac/Linux·고급: 스크립트 직접 받기 + 명령 복사 */}
+            <details className="agent-adv">
+              <summary>Mac/Linux · 직접 실행</summary>
+              <a className="settings-action" href="/api/agent/download" download="push_agent.py">
+                ⬇ push_agent.py 직접 받기
+              </a>
+              <div className="agent-cmd">
+                <code>{agentCmd}</code>
+                <button className="agent-copy" onClick={copyCmd} title="명령 복사">
+                  {copied ? "✓ 복사됨" : "복사"}
+                </button>
+              </div>
+            </details>
           </section>
 
           {/* 생성물 전체 가져오기 */}
@@ -201,6 +214,8 @@ export function SettingsPanel({
           </section>
         </div>
       </div>
+
+      {scOpen && <ShortcutsWindow onClose={() => setScOpen(false)} />}
     </>
   );
 }

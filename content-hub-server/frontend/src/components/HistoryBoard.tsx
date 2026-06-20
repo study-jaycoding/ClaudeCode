@@ -7,6 +7,7 @@ import { api } from "../api";
 import { download, downloadName } from "../lib/download";
 import { thumbOf } from "../lib/media";
 import { useClickSeparation } from "../lib/useClickSeparation";
+import { matchShortcut } from "../lib/shortcuts";
 import { MediaThumbnail } from "./MediaThumbnail";
 import type { Generation, HistoryGraph, InfoTarget, PreviewTarget } from "../types";
 
@@ -159,11 +160,9 @@ export function HistoryBoard({
   useEffect(() => {
     if (!focusId) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.ctrlKey || e.metaKey || e.altKey) return;
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-      const k = e.key.toLowerCase();
-      if (k === "d") {
+      if (matchShortcut(e, "boardDisable")) {
         // 비활성화(회색) 토글 — 선택 필요
         const ids = [...selectedRef.current];
         if (!ids.length) return;
@@ -174,7 +173,7 @@ export function HistoryBoard({
           ids.forEach((id) => (allOff ? next.delete(id) : next.add(id))); // 전부 꺼져있으면 켜기, 아니면 끄기
           return next;
         });
-      } else if (k === "l") {
+      } else if (matchShortcut(e, "boardArrange")) {
         // 자동 정렬 — 선택 카드의 수동 위치를 지워 기본 레이아웃(같은 레벨=세로, 연결=우측)으로 복귀.
         // 선택이 없으면 전체를 자동 정렬.
         e.preventDefault();

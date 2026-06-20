@@ -5,6 +5,7 @@
 // 선택 상태는 App 이 Set<string>(id) 로 보유 — 일괄 작업/select-bar 가 의존.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useT } from "../lib/i18n";
+import { matchShortcut } from "../lib/shortcuts";
 import type { Generation, InfoTarget, PreviewTarget } from "../types";
 import { GenerationCard } from "./GenerationCard";
 
@@ -221,22 +222,23 @@ export function ThumbnailGrid(props: Props) {
     // 카드 인라인 입력 중엔 무시(타이핑이 그리드 네비/단축키로 새지 않게).
     if ((e.target as HTMLElement).tagName === "INPUT") return;
     if (!generations.length) return;
-    // #/c — 포커스 카드에서 인라인 편집·코멘트(에셋 파트와 동일). 수식키 없을 때만.
-    // s 는 생성탭에선 비활성(공유는 카드 S 클릭/오버레이/선택바로만 — 키보드로 공유 안 됨).
-    if (!e.ctrlKey && !e.metaKey && !e.altKey) {
-      const fgen = generations[focusIdx];
-      if (fgen) {
-        if (e.key === "#") {
-          e.preventDefault();
-          setEditTarget({ id: fgen.id, field: "tag" });
-          return;
-        }
-        if (e.key === "c" || e.key === "C") {
-          e.preventDefault();
-          props.onOpenComments(fgen);
-          return;
-        }
-      }
+    // 태그(#)·코멘트(c) — 포커스 카드에서 인라인 편집·코멘트(에셋 파트와 동일). 단축키 레지스트리로
+    // 매칭(사용자 변경 가능). s 는 생성탭에선 비활성(공유는 카드 S 클릭/오버레이/선택바로만).
+    const fgen = generations[focusIdx];
+    if (fgen && matchShortcut(e, "tag")) {
+      e.preventDefault();
+      setEditTarget({ id: fgen.id, field: "tag" });
+      return;
+    }
+    if (fgen && matchShortcut(e, "comment")) {
+      e.preventDefault();
+      props.onOpenComments(fgen);
+      return;
+    }
+    if (fgen && matchShortcut(e, "showHistory")) {
+      e.preventDefault();
+      props.onShowHistory?.(fgen); // 그 카드의 히스토리(가계) 패널 열기
+      return;
     }
     if (e.key.startsWith("Arrow")) {
       e.preventDefault();
@@ -273,7 +275,7 @@ export function ThumbnailGrid(props: Props) {
         else n.add(id);
         onSelectedChange(n);
       }
-    } else if ((e.key === "a" || e.key === "A") && (e.ctrlKey || e.metaKey)) {
+    } else if (matchShortcut(e, "selectAll")) {
       e.preventDefault();
       onSelectedChange(new Set(generations.map((g) => g.id)));
     } else if (e.key === "Escape") {

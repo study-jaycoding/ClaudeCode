@@ -350,6 +350,32 @@ select optgroup {
 }
 .settings-action:hover:not(:disabled) { background: var(--grad); color: var(--accent-ink); }
 .settings-action:disabled { opacity: 0.6; cursor: default; }
+
+/* 단축키 변경 플로팅 창 — 설정창 위에 확실히 띄운다(자기 catcher 위, 클릭 가능). */
+.sc-catcher { z-index: 320; }
+.sc-float { z-index: 330; }
+.sc-warn { color: var(--accent); }
+
+/* 단축키 목록 */
+.sc-list { display: flex; flex-direction: column; gap: 4px; margin: 10px 0; }
+.sc-group { font-size: 10.5px; font-weight: 700; color: var(--muted2); letter-spacing: .04em;
+  text-transform: uppercase; margin: 8px 0 2px; }
+.sc-group:first-child { margin-top: 0; }
+.sc-row { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 8px;
+  background: var(--panel2, rgba(255,255,255,.03)); }
+.sc-row.capturing { outline: 1px solid var(--accent); background: var(--grad-soft); }
+.sc-label { flex: 1; font-size: 12px; color: var(--text); }
+.sc-key { min-width: 78px; text-align: center; padding: 3px 8px; border-radius: 6px;
+  border: 1px solid var(--border); background: rgba(0,0,0,.25); font-size: 11px; font-weight: 700;
+  color: var(--muted); font-family: inherit; }
+.sc-row.capturing .sc-key { color: var(--accent); border-color: var(--accent); }
+.sc-edit { padding: 3px 10px; border-radius: 6px; border: 1px solid var(--border);
+  background: transparent; color: var(--muted); font-size: 11px; font-weight: 700; cursor: pointer; }
+.sc-edit:hover { border-color: var(--accent); color: var(--accent); }
+.sc-reset { width: 26px; padding: 3px 0; border-radius: 6px; border: 1px solid transparent;
+  background: transparent; color: var(--muted2); font-size: 13px; cursor: pointer; }
+.sc-reset:hover:not(:disabled) { color: var(--accent); }
+.sc-reset:disabled { opacity: 0.25; cursor: default; }
 .manage-info { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 12px; }
 .manage-row { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; font-size: 13px; }
 .manage-row-label { color: var(--muted); flex: none; }

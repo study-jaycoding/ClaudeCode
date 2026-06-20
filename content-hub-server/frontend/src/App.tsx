@@ -17,6 +17,7 @@ import { ThumbnailGrid } from "./components/ThumbnailGrid";
 import { TopBar } from "./components/TopBar";
 import { useT } from "./lib/i18n";
 import { useAskPrompt } from "./lib/prompt";
+import { matchShortcut } from "./lib/shortcuts";
 import { makeStore } from "./lib/storage";
 import type {
   Account,
@@ -425,7 +426,7 @@ export default function App() {
   // 프롬프트는 항상 도킹돼 있으므로 Ctrl/⌘+K 는 '열기'가 아니라 프롬프트로 '포커스'.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+      if (matchShortcut(e, "focusPrompt")) {
         e.preventDefault();
         window.dispatchEvent(new CustomEvent("ch:focus-prompt"));
       }
@@ -472,17 +473,23 @@ export default function App() {
           t.isContentEditable)
       )
         return;
-      if (e.ctrlKey || e.metaKey || e.altKey) return;
       const ids = [...selectedRef.current];
-      if (ids.length === 0) return;
-      const k = e.key.toLowerCase();
-      // s/#/c 는 그리드(ThumbnailGrid)가 포커스 카드에서 인라인으로 처리 — 에셋 파트와 동일.
-      // r/g/b(컬러)·Escape 만 전역(선택 항목 일괄).
-      if (k === "r" || k === "g" || k === "b") {
-        e.preventDefault();
-        colorSelected(ids, KEY_COLORS[k]);
-      } else if (e.key === "Escape") {
+      if (e.key === "Escape") {
         clearSelect();
+        return;
+      }
+      if (ids.length === 0) return;
+      // s/#/c 는 그리드(ThumbnailGrid)가 포커스 카드에서 인라인으로 처리 — 에셋 파트와 동일.
+      // r/g/b(컬러)만 전역(선택 항목 일괄). 단축키는 레지스트리(사용자 변경 가능)로 매칭.
+      if (matchShortcut(e, "colorRed")) {
+        e.preventDefault();
+        colorSelected(ids, KEY_COLORS.r);
+      } else if (matchShortcut(e, "colorGreen")) {
+        e.preventDefault();
+        colorSelected(ids, KEY_COLORS.g);
+      } else if (matchShortcut(e, "colorBlue")) {
+        e.preventDefault();
+        colorSelected(ids, KEY_COLORS.b);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -704,64 +711,103 @@ export default function App() {
     }
   };
 
-  // 히스토리 뱃지 → 가계 패널 열기(조상+파생본 조회)
+  // 히스토리 뱃지 → 가계 패널 열기(조상+파생본 조회). 오버레이로 히스토리 엔트리 추가 →
+  // 보드 진입 후 뒤로가기 시 이 패널 화면으로 그대로 복귀한다.
   const onShowHistory = async (g: Generation) => {
     try {
-      setHistory(await api.history(g.id));
+      const h = await api.history(g.id);
+      openOverlay("history", h);
     } catch (e) {
       flash("가계 조회 실패: " + String(e));
     }
   };
-  // 브라우저 뒤로가기를 앱 내 화면 전환으로 처리 — '구성에서 보기'로 들어간 뒤 뒤로가기 시
-  // 이전 화면(이전 탭 + 열려있던 히스토리 패널/미리보기)으로 복귀(앱 밖의 404/API 페이지로 이탈 방지).
-  const tabRef = useRef(filters.tab);
-  tabRef.current = filters.tab;
-  // 보드(구성탭)에 들어오기 직전의 '복귀 대상' 화면(탭·열려있던 패널·미리보기). 진입 때 캡처.
-  //  - tab 은 절대 'compose' 로 두지 않는다(보드 안에서 또 진입해도 뒤로가기가 보드를 확실히 닫게).
-  const boardReturnRef = useRef<{
-    tab: Filters["tab"];
-    hist: History | null;
-    preview: PreviewTarget | null;
-  } | null>(null);
+  // ───────────────────── 브라우저 뒤로/앞으로 네비게이션 ─────────────────────
+  // 탭(my/team/compose=보드)과 주요 오버레이(미리보기·코멘트·관리자 창)를 브라우저 히스토리에
+  // 기록해 뒤로가기=직전 화면, 앞으로가기=다음 화면이 되게 한다(앱 밖 이탈 방지). 각 엔트리는
+  // 가벼운 디스크립터(NavView)만 history.state 에 담고, 무거운 타깃(PreviewTarget·코멘트 genId)은
+  // navPayloadsRef 에 key 로 보관해 같은 세션 앞으로가기 때 복원한다. 정보 팝업(휠클릭)·가계 패널은
+  // 비대상(화면 전환 시 함께 닫힘) — 사용자 선택 범위.
+  type NavOv = "preview" | "comment" | "admin" | "history";
+  type NavView = { tab: Filters["tab"]; focusId: string | null; ov: NavOv | null; key: number };
+  const navPayloadsRef = useRef(new Map<number, unknown>());
+  const navSeqRef = useRef(0);
+  const viewRef = useRef<NavView>({ tab: filters.tab, focusId: null, ov: null, key: 0 });
+
+  // 히스토리 엔트리(또는 popstate 대상)를 실제 화면 상태로 반영한다(여기서는 push 하지 않는다).
+  const applyView = useCallback((v: NavView) => {
+    viewRef.current = v;
+    const payload = v.key ? navPayloadsRef.current.get(v.key) : undefined;
+    setPreview(v.ov === "preview" ? ((payload as PreviewTarget) ?? null) : null);
+    setCommentGenId(v.ov === "comment" ? ((payload as string) ?? null) : null);
+    setHistory(v.ov === "history" ? ((payload as History) ?? null) : null); // 가계 패널도 복원
+    setAdminOpen(v.ov === "admin");
+    setInfo(null); // 정보 팝업은 화면 전환 시 닫는다(비대상)
+    if (v.tab === "compose") {
+      setBoardFocusId(v.focusId);
+      setBoardArrange((x) => x + 1); // 진입 시 자동 정렬(패널 미니 트리와 같은 배치)
+    } else {
+      setBoardFocusId(null);
+    }
+    setFilters((f) => (f.tab === v.tab ? f : { ...f, tab: v.tab }));
+  }, []);
+
+  // 새 화면으로 이동: 히스토리 엔트리 추가 + 즉시 반영.
+  const navigate = useCallback(
+    (next: NavView) => {
+      window.history.pushState({ chv: next }, "");
+      applyView(next);
+    },
+    [applyView],
+  );
+
+  // 현재 탭/보드 포커스는 그대로 두고 오버레이만 띄운다(payload 보관 후 이동).
+  const openOverlay = useCallback(
+    (ov: NavOv, payload?: unknown) => {
+      const key = ov === "admin" ? 0 : (navSeqRef.current += 1);
+      if (key) navPayloadsRef.current.set(key, payload);
+      const cur = viewRef.current;
+      navigate({ tab: cur.tab, focusId: cur.focusId, ov, key });
+    },
+    [navigate],
+  );
+
+  // 오버레이 닫기 = 히스토리 한 칸 뒤로(=직전 화면). popstate 가 실제 닫음을 반영.
+  const closeOverlay = useCallback(() => {
+    if (viewRef.current.ov) window.history.back();
+  }, []);
+
+  // 탭 전환(보드 진입은 enterBoard).
+  const navTab = useCallback(
+    (tab: Filters["tab"]) =>
+      navigate({
+        tab,
+        focusId: tab === "compose" ? viewRef.current.focusId : null,
+        ov: null,
+        key: 0,
+      }),
+    [navigate],
+  );
+
+  // 구성탭 보드에 특정 결과물 포커스로 진입('구성에서 보기').
+  const enterBoard = useCallback(
+    (genId: string) => navigate({ tab: "compose", focusId: genId, ov: null, key: 0 }),
+    [navigate],
+  );
+
+  const openPreview = useCallback((t: PreviewTarget) => openOverlay("preview", t), [openOverlay]);
+  const openComment = useCallback((genId: string) => openOverlay("comment", genId), [openOverlay]);
+  const openAdmin = useCallback(() => openOverlay("admin"), [openOverlay]);
+
+  // popstate(뒤로/앞으로) → 대상 엔트리를 반영. 초기 엔트리에 현재 뷰를 심어 둔다(첫 뒤로가기 안전).
   useEffect(() => {
+    window.history.replaceState({ chv: viewRef.current }, "");
     const onPop = (e: PopStateEvent) => {
-      const st = e.state as { chBoard?: boolean; genId?: string } | null;
-      if (st && st.chBoard) {
-        // 보드 엔트리로 이동(앞으로 가기, 또는 board→board 뒤로) → 그 genId 로 보드 열기.
-        setHistory(null);
-        setPreview(null);
-        setBoardFocusId(st.genId ?? null);
-        setBoardArrange((v) => v + 1);
-        setFilters((f) => (f.tab === "compose" ? f : { ...f, tab: "compose" }));
-      } else if (filtersRef.current.tab === "compose") {
-        // 비보드 엔트리로 이동(보드에서 빠져나감) → 보드가 열려 있을 때만 복귀 화면으로 닫는다.
-        const ret = boardReturnRef.current;
-        setBoardFocusId(null);
-        setFilters((f) => ({ ...f, tab: ret?.tab ?? "my" })); // compose 가 아닌 탭으로 → 보드 닫힘
-        setHistory(ret?.hist ?? null);
-        setPreview(ret?.preview ?? null);
-      }
+      const st = e.state as { chv?: NavView } | null;
+      applyView(st?.chv ?? { tab: "my", focusId: null, ov: null, key: 0 });
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
-  }, []);
-
-  // 공통: 결과물 id 로 구성탭 히스토리 트리 열기. 같은 URL 에 히스토리 엔트리만 추가(state 에 genId).
-  //  진입 직전 화면을 boardReturnRef 에 캡처 → 뒤로가기로 그 화면 복원, 앞으로가기로 보드 재진입.
-  const enterBoard = (genId: string) => {
-    const curTab = filters.tab;
-    boardReturnRef.current = {
-      tab: curTab === "compose" ? "my" : curTab, // 보드에서 또 진입해도 복귀 탭은 비-compose
-      hist: history,
-      preview,
-    };
-    window.history.pushState({ chBoard: true, genId }, "");
-    setHistory(null);
-    setPreview(null);
-    setBoardFocusId(genId);
-    setBoardArrange((v) => v + 1); // 진입 시 자동 정렬 → 패널 미니 트리와 같은 깔끔한 트리로 보이게
-    setFilters((f) => ({ ...f, tab: "compose" }));
-  };
+  }, [applyView]);
 
   // 히스토리 패널 '구성에서 보기' → 구성탭 트리(뒤로가기로 직전 화면 복원).
   const onOpenInBoard = (g: Generation) => enterBoard(g.id);
@@ -951,7 +997,7 @@ export default function App() {
     try {
       await api.importToWorkspace(g.id);
       flash("내 워크스페이스로 가져왔습니다 (history 기록).");
-      setFilters((f) => ({ ...f, tab: "my" }));
+      navTab("my"); // 내 작업 탭으로(히스토리 연동)
     } catch (e) {
       flash("가져오기 실패: " + String(e));
     }
@@ -1019,7 +1065,8 @@ export default function App() {
       <TopBar
         filters={filters}
         onTab={(tab) => {
-          setFilters({ tab });
+          navTab(tab); // 브라우저 히스토리 엔트리 추가(뒤로/앞으로 연동)
+          setFilters({ tab }); // 직접 탭 클릭은 다른 필터 초기화(기존 동작 유지)
           clearSelect();
         }}
         onSearch={(q) => patch({ search: q || undefined })}
@@ -1037,7 +1084,7 @@ export default function App() {
         }}
         onOpenSpotlight={() => window.dispatchEvent(new CustomEvent("ch:focus-prompt"))}
         onOpenAssets={openAssetsWindow}
-        onOpenAdmin={() => setAdminOpen(true)}
+        onOpenAdmin={openAdmin}
         account={account}
         onLogout={onLogout}
       />
@@ -1092,7 +1139,7 @@ export default function App() {
               focusId={boardFocusId}
               reloadSignal={boardSignal}
               arrangeSignal={boardArrange}
-              onPreview={setPreview}
+              onPreview={openPreview}
               onInfo={setInfo}
               onRegenerate={onRegenerate}
               onPublish={onPublish}
@@ -1192,7 +1239,7 @@ export default function App() {
                     onToggleSelect={toggleSelect}
                     onSetSource={onSetSource}
                     onSetTags={onSetTags}
-                    onOpenComments={(g) => setCommentGenId(g.id)}
+                    onOpenComments={(g) => openComment(g.id)}
                     onRegenerate={onRegenerate}
                     onPublish={onPublish}
                     onUnpublish={onUnpublish}
@@ -1205,7 +1252,7 @@ export default function App() {
                     onColor={onColor}
                     onTags={onTags}
                 onInfo={handleInfo}
-                onPreview={setPreview}
+                onPreview={openPreview}
                 onShowHistory={onShowHistory}
                 hasMore={hasMore}
                 loadingMore={loadingMore}
@@ -1367,7 +1414,7 @@ export default function App() {
           }
           myId={account?.creator_uid || "me"}
           syncTick={syncTick}
-          onClose={() => setCommentGenId(null)}
+          onClose={closeOverlay}
           onChanged={reload}
         />
       )}
@@ -1375,7 +1422,7 @@ export default function App() {
         <InfoPopup
           target={info}
           onClose={() => setInfo(null)}
-          onPreview={setPreview}
+          onPreview={openPreview}
           projects={projects}
           onOpenInBoard={(g) => {
             setInfo(null);
@@ -1386,7 +1433,7 @@ export default function App() {
       {preview && (
         <MediaPreview
           target={preview}
-          onClose={() => setPreview(null)}
+          onClose={closeOverlay}
           onOpenInBoard={onOpenInBoardFromPreview}
         />
       )}
@@ -1394,7 +1441,7 @@ export default function App() {
         <AdminWindow
           account={account}
           onClose={() => {
-            setAdminOpen(false);
+            closeOverlay(); // 히스토리 뒤로 → 관리자 창 닫힘 반영
             reload(); // 등급·프로젝트 변경이 라이브러리/필터에 반영되게
           }}
         />
@@ -1405,8 +1452,8 @@ export default function App() {
       {history && (
         <HistoryPanel
           history={history}
-          onClose={() => setHistory(null)}
-          onPreview={setPreview}
+          onClose={closeOverlay}
+          onPreview={openPreview}
           onInfo={setInfo}
           onCompare={setCompareGens}
           onChanged={reload}
