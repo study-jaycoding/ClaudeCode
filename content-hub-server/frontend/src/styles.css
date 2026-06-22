@@ -207,6 +207,13 @@ select optgroup {
   border: 1px solid var(--border); background: var(--surface2, rgba(127,127,127,0.1)); color: var(--text);
 }
 .agent-copy:hover { background: var(--grad-soft); }
+/* 긴 지시문(백필 프롬프트) — 한 줄 강제 대신 줄바꿈 + 복사버튼 상단 정렬 */
+.agent-cmd.prompt { align-items: flex-start; }
+.agent-cmd.prompt code { white-space: pre-wrap; word-break: break-word; overflow-x: visible; }
+/* 단계 안내(백필 등) */
+.settings-steps { margin: 9px 0 0; padding-left: 18px; font-size: 11px; color: var(--muted2); line-height: 1.6; }
+.settings-steps li { margin: 3px 0; }
+.settings-steps code { font-size: 10.5px; background: rgba(127,127,127,0.14); padding: 0 4px; border-radius: 4px; }
 /* 폴백(Mac/Linux·고급) 접이식 */
 .agent-adv { margin-top: 11px; }
 .agent-adv summary { font-size: 11px; color: var(--muted2); cursor: pointer; padding: 2px 0; }

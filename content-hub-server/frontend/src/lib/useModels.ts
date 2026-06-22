@@ -103,6 +103,64 @@ export function activeConstraints(
   return out;
 }
 
+// 모델 파라미터의 실효 기본값으로 초기 옵션 객체 구성(숨김 파라미터 제외).
+//  apply()(모델 선택 시 초기화)와 프리페치(첫 토글 비용 예열)에서 공용 — 둘이 같은 키를 내도록 일원화.
+export function defaultOptions(
+  params: ModelParam[],
+): Record<string, string | number | boolean> {
+  const init: Record<string, string | number | boolean> = {};
+  for (const p of params) {
+    if (HIDDEN_PARAMS.has(p.name)) continue;
+    const dv = effectiveDefault(p); // 오버라이드(bitrate=high 등) 반영
+    if (dv != null) init[p.name] = dv;
+  }
+  return init;
+}
+
+// 옵션값에 모델 제약을 1회 적용해 보정된 새 객체를 반환(변경 없으면 입력 ref 그대로).
+//  ① enum 조합 제약 위반 → 허용값으로 스냅  ② 정수 범위 밖 → 클램프. 멱등.
+//  보정 effect 와 프리페치(정착 기본값 산출)가 동일 로직을 쓰도록 추출 — 키 불일치 방지.
+export function correctedOptions(
+  model: string,
+  params: ModelParam[],
+  optionValues: Record<string, string | number | boolean>,
+): Record<string, string | number | boolean> {
+  const constraints = activeConstraints(model, optionValues);
+  let next: Record<string, string | number | boolean> | null = null;
+  // ① enum 조합 제약 → 금지값이면 허용값으로 스냅
+  for (const [pname, c] of Object.entries(constraints)) {
+    const cur = String(optionValues[pname] ?? "");
+    if (cur && !c.allow.has(cur)) {
+      const p = params.find((x) => x.name === pname);
+      const ordered = (p?.enum || []).filter((v) => c.allow.has(v));
+      const snap = ordered.length ? ordered[ordered.length - 1] : [...c.allow][0];
+      if (snap != null) (next ||= { ...optionValues })[pname] = snap;
+    }
+  }
+  // ② 정수 범위 제약 → 범위 밖이면 클램프
+  for (const [pname, rg] of Object.entries(NUMERIC_RANGE[model] || {})) {
+    const v = optionValues[pname];
+    if (v === undefined || v === "") continue;
+    const n = Number(v);
+    if (Number.isNaN(n)) continue;
+    const cl = Math.min(rg.max, Math.max(rg.min, n));
+    if (cl !== n) (next ||= { ...optionValues })[pname] = cl;
+  }
+  return next ?? optionValues;
+}
+
+// cost 캐시 키 — model + 정렬된 옵션값. prompt 는 비용에 무관(현재 호출도 prompt 미전달)하므로 제외.
+export function costKey(
+  model: string,
+  opts: Record<string, string | number | boolean>,
+): string {
+  const norm = Object.keys(opts)
+    .sort()
+    .map((k) => k + "=" + String(opts[k]))
+    .join("&");
+  return model + "|" + norm;
+}
+
 export function useModels(onError: (msg: string) => void) {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [type, setType] = useState<"image" | "video">("image");
@@ -115,6 +173,8 @@ export function useModels(onError: (msg: string) => void) {
   const pendingOptsRef = useRef<Record<string, string | number | boolean> | null>(null);
   // 모델별 파라미터 캐시 — 이미지/비디오 토글 시 재요청(네트워크) 없이 즉시 전환.
   const paramsCacheRef = useRef<Record<string, ModelParamsOut>>({});
+  // cost(예상 크레딧) 결과 캐시 — 키=model+옵션값. 같은 조합 재방문 시 CLI/디바운스 없이 즉시 표시.
+  const costCacheRef = useRef<Record<string, number>>({});
   // 드롭다운 닫기 브리지 — open/setOpen 은 컴포넌트 UI 상태로 남으므로,
   // setOpt 가 옵션 선택 후 드롭다운을 닫도록 컴포넌트가 setOpen 을 여기 등록한다.
   const setOpenRef = useRef<((v: string | null) => void) | null>(null);
@@ -150,12 +210,7 @@ export function useModels(onError: (msg: string) => void) {
     // 파라미터 → params + 기본값 옵션 적용. 드롭 복원이 대기 중이면 기본값 위에 덮음.
     const apply = (r: ModelParamsOut) => {
       setParams(r.params);
-      const init: Record<string, string | number | boolean> = {};
-      for (const p of r.params) {
-        if (HIDDEN_PARAMS.has(p.name)) continue;
-        const dv = effectiveDefault(p); // 오버라이드(bitrate=high 등) 반영
-        if (dv != null) init[p.name] = dv;
-      }
+      const init = defaultOptions(r.params); // 실효 기본값(오버라이드 반영)
       if (pendingOptsRef.current) {
         setOptionValues({ ...init, ...pendingOptsRef.current });
         pendingOptsRef.current = null;
@@ -188,22 +243,53 @@ export function useModels(onError: (msg: string) => void) {
   }, [model]);
 
   // 두 모델(이미지/비디오) 파라미터를 미리 받아 캐시 → 첫 토글부터 즉시 전환.
+  // 추가로 각 모델 '정착 기본옵션'의 비용도 미리 추정해 cost 캐시에 넣어 둠(B) → 첫 토글의 비용 멈칫도 제거.
   useEffect(() => {
+    // 기본옵션을 제약 보정까지 적용해 '정착' 상태로 만든 뒤 그 비용을 예열(모델 선택 시 cost effect 가 낼 키와 일치).
+    const warmCost = (m: string, params: ModelParam[]) => {
+      let opts = defaultOptions(params);
+      for (let i = 0; i < 4; i++) {
+        const c = correctedOptions(m, params, opts);
+        if (c === opts) break; // 정착(멱등)
+        opts = c;
+      }
+      const key = costKey(m, opts);
+      if (costCacheRef.current[key] !== undefined) return;
+      api
+        .estimateCost(m, opts)
+        .then((r) => {
+          costCacheRef.current[key] = r.credits;
+        })
+        .catch(() => {});
+    };
     for (const m of [...ALLOWED.image, ...ALLOWED.video]) {
-      if (paramsCacheRef.current[m]) continue;
+      const cached = paramsCacheRef.current[m];
+      if (cached) {
+        warmCost(m, cached.params);
+        continue;
+      }
       api
         .modelParams(m)
         .then((r) => {
           paramsCacheRef.current[m] = r;
+          warmCost(m, r.params);
         })
         .catch(() => {});
     }
   }, []);
 
-  // 모델/옵션 바뀌면 예상 크레딧 재추정(debounce 250ms).
+  // 모델/옵션 바뀌면 예상 크레딧 재추정. 같은 조합은 캐시 적중 → 즉시(디바운스·CLI 생략), 새 조합만 debounce 250ms + CLI.
   useEffect(() => {
     if (!model) {
       setCost(null);
+      return;
+    }
+    const key = costKey(model, optionValues);
+    const hit = costCacheRef.current[key];
+    if (hit !== undefined) {
+      // 캐시 적중(토글 왕복·이전 본 옵션 재선택) → 멈칫 없이 즉시 표시.
+      setCost(hit);
+      setCostLoading(false);
       return;
     }
     let alive = true;
@@ -211,7 +297,13 @@ export function useModels(onError: (msg: string) => void) {
     const t = window.setTimeout(() => {
       api
         .estimateCost(model, optionValues)
-        .then((r) => alive && (setCost(r.credits), setCostLoading(false)))
+        .then(
+          (r) =>
+            alive &&
+            ((costCacheRef.current[key] = r.credits),
+            setCost(r.credits),
+            setCostLoading(false)),
+        )
         .catch(() => alive && (setCost(null), setCostLoading(false)));
     }, 250);
     return () => {
@@ -227,27 +319,8 @@ export function useModels(onError: (msg: string) => void) {
   //  예) resolution=1080p 인데 mode 를 fast 로 바꾸면 → 720p 로 자동 하향(헛 생성·오해 방지).
   //  멱등(보정 후엔 유효 → 재실행해도 변화 없음)이라 루프 없음.
   useEffect(() => {
-    let next: Record<string, string | number | boolean> | null = null;
-    // ① enum 조합 제약 → 금지값이면 허용값으로 스냅
-    for (const [pname, c] of Object.entries(constraints)) {
-      const cur = String(optionValues[pname] ?? "");
-      if (cur && !c.allow.has(cur)) {
-        const p = params.find((x) => x.name === pname);
-        const ordered = (p?.enum || []).filter((v) => c.allow.has(v));
-        const snap = ordered.length ? ordered[ordered.length - 1] : [...c.allow][0];
-        if (snap != null) (next ||= { ...optionValues })[pname] = snap;
-      }
-    }
-    // ② 정수 범위 제약 → 범위 밖이면 클램프(예: gpt_image_2 batch_size 1~4)
-    for (const [pname, rg] of Object.entries(NUMERIC_RANGE[model] || {})) {
-      const v = optionValues[pname];
-      if (v === undefined || v === "") continue;
-      const n = Number(v);
-      if (Number.isNaN(n)) continue;
-      const cl = Math.min(rg.max, Math.max(rg.min, n));
-      if (cl !== n) (next ||= { ...optionValues })[pname] = cl;
-    }
-    if (next) setOptionValues(next);
+    const next = correctedOptions(model, params, optionValues);
+    if (next !== optionValues) setOptionValues(next);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model, optionValues, params]);
 

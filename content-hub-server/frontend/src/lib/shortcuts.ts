@@ -23,7 +23,7 @@ export interface ShortcutDef {
 }
 
 export const SHORTCUTS: ShortcutDef[] = [
-  { id: "focusPrompt", label: "프롬프트 입력으로 포커스", group: "라이브러리", def: "mod+k" },
+  { id: "focusPrompt", label: "프롬프트 입력바 표시/숨김", group: "라이브러리", def: "mod+k" },
   { id: "colorRed", label: "컬러 — 빨강", group: "라이브러리", def: "r" },
   { id: "colorGreen", label: "컬러 — 초록", group: "라이브러리", def: "g" },
   { id: "colorBlue", label: "컬러 — 파랑", group: "라이브러리", def: "b" },

@@ -423,17 +423,23 @@ export default function App() {
     };
   }, [reload]);
 
-  // 프롬프트는 항상 도킹돼 있으므로 Ctrl/⌘+K 는 '열기'가 아니라 프롬프트로 '포커스'.
+  // 프롬프트 입력바 표시/숨김 — Ctrl/⌘+K 토글. 입력 내용 보존 위해 언마운트 대신 display 토글.
+  const [promptVisible, setPromptVisible] = useState(true);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (matchShortcut(e, "focusPrompt")) {
         e.preventDefault();
-        window.dispatchEvent(new CustomEvent("ch:focus-prompt"));
+        setPromptVisible((v) => !v); // 보이면 숨기고, 숨겨졌으면 다시 보이기
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  // 숨김→표시로 바뀌면 입력창에 포커스(표시되자마자 바로 입력 가능).
+  useEffect(() => {
+    if (promptVisible) window.dispatchEvent(new CustomEvent("ch:focus-prompt"));
+  }, [promptVisible]);
 
   // 마지막으로 보던 상태 저장 → 다음에 열 때 복원
   useEffect(() => LS.set("filters", JSON.stringify(filters)), [filters]);
@@ -1082,7 +1088,10 @@ export default function App() {
           await reload();
           flash(msg);
         }}
-        onOpenSpotlight={() => window.dispatchEvent(new CustomEvent("ch:focus-prompt"))}
+        onOpenSpotlight={() => {
+          setPromptVisible(true); // 숨겨져 있으면 다시 보이기(보이면 그대로) + 포커스
+          window.dispatchEvent(new CustomEvent("ch:focus-prompt"));
+        }}
         onOpenAssets={openAssetsWindow}
         onOpenAdmin={openAdmin}
         account={account}
@@ -1263,8 +1272,8 @@ export default function App() {
         )}
       </div>
 
-      {/* 프롬프트 입력바 — 구성탭에서도 표시(트리에서 바로 생성) */}
-      {true && (
+      {/* 프롬프트 입력바 — 구성탭에서도 표시. Ctrl/⌘+K 로 표시/숨김 토글(display 토글로 입력 상태 보존) */}
+      <div style={promptVisible ? undefined : { display: "none" }}>
         <SpotlightPrompt
           armedAutoTags={[...armedAutoTags]}
           activeProjectId={
@@ -1405,7 +1414,7 @@ export default function App() {
             bumpBoard(); // 구성탭 트리에 새 생성(연결되면) 반영
           }}
         />
-      )}
+      </div>
       {commentGenId && (
         <GenCommentPanel
           genId={commentGenId}

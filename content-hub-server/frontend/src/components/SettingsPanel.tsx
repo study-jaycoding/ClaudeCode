@@ -34,6 +34,8 @@ export function SettingsPanel({
   const [lang, setLangState] = useState<Lang>(loadLang());
   const [reduceMotion, setReduceMotion] = useState(loadReduceMotion());
   const [copied, setCopied] = useState(false);
+  const [copiedBf, setCopiedBf] = useState(false); // 백필 지시문 복사됨 표시
+  const [msg, setMsg] = useState("");
   const [syncing, setSyncing] = useState(false);
   const [scOpen, setScOpen] = useState(false); // 단축키 변경 플로팅 창
 
@@ -47,7 +49,18 @@ export function SettingsPanel({
       setTimeout(() => setCopied(false), 1500);
     });
   };
-  const [msg, setMsg] = useState("");
+  // 과거 전체(100건 밖) 백필 지시문 — 힉스필드 MCP가 붙은 Claude 세션에 그대로 줄 문장.
+  //  서버 코드·DB 접근 없이 허브 로그인만으로 /api/ingest/mcp 에 직접 적재(멱등). origin·이메일 자동 주입.
+  const backfillPrompt = `힉스필드 MCP의 show_generations 도구로 내 생성 이력을 next_cursor가 없어질 때까지 끝까지 페이지네이션해줘. 각 페이지의 items 배열을 ${window.location.origin}/api/ingest/mcp 로 POST해서 이 허브에 올려줘. 인증은 ${window.location.origin}/api/auth/login 에 이메일 ${
+    account?.email || "<내 이메일>"
+  } 과 내 비밀번호로 먼저 로그인해 받은 token을 Authorization: Bearer 헤더로 붙이면 돼. 멱등이라 여러 번 돌려도 중복은 안 생겨.`;
+  const copyBackfill = () => {
+    navigator.clipboard?.writeText(backfillPrompt).then(() => {
+      setCopiedBf(true);
+      setMsg("지시문을 복사했습니다. 내 힉스필드 계정으로 MCP가 연결된 Claude 세션에 붙여넣으세요.");
+      setTimeout(() => setCopiedBf(false), 1500);
+    });
+  };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -137,22 +150,31 @@ export function SettingsPanel({
             </p>
           </section>
 
-          {/* 모션(애니메이션) */}
+          {/* 모션(애니메이션) — 언어처럼 ON/OFF 버튼. ON=재생, OFF=정지(reduceMotion=true). */}
           <section className="settings-section">
             <h4>{t("모션")}</h4>
-            <label className="toggle">
-              <input
-                type="checkbox"
-                checked={reduceMotion}
-                onChange={(e) => {
-                  setReduceMotion(e.target.checked);
-                  saveReduceMotion(e.target.checked); // 즉시 적용 + 영속
+            <div className="lang-toggle">
+              <button
+                className={!reduceMotion ? "on" : ""}
+                onClick={() => {
+                  setReduceMotion(false);
+                  saveReduceMotion(false); // 즉시 적용 + 영속
                 }}
-              />
-              {t("모션 끄기 (골드 글로우 등 애니메이션 정지)")}
-            </label>
+              >
+                ON
+              </button>
+              <button
+                className={reduceMotion ? "on" : ""}
+                onClick={() => {
+                  setReduceMotion(true);
+                  saveReduceMotion(true);
+                }}
+              >
+                OFF
+              </button>
+            </div>
             <p className="settings-hint">
-              {t("켜면 최종(골드) 카드의 흐르는 빛 같은 장식 애니메이션이 멈춥니다.")}
+              {t("ON이면 최종(골드) 카드의 흐르는 빛 같은 장식 애니메이션이 재생되고, OFF면 멈춥니다.")}
             </p>
           </section>
 
@@ -170,18 +192,13 @@ export function SettingsPanel({
           {/* 내 힉스필드 연결 — 단축키 아래, 전체 가져오기 위 */}
           <section className="settings-section">
             <h4>{t("내 힉스필드 연결 (에이전트)")}</h4>
-            <p className="settings-hint">
-              내 PC에서 만든 힉스필드 작업을 허브로 올리고, 허브의 생성·재생성을 내 로컬 CLI로
-              실행하려면 이 에이전트를 <b>내 PC에서</b> 띄워두세요. (힉스필드 CLI 설치 +{" "}
-              <code>higgsfield auth login</code> + 파이썬 필요)
-            </p>
             <a className="settings-action" href="/api/agent/run-bat" download="run-agent.bat">
               ⬇ run-agent.bat 받기 (Windows · 원클릭)
             </a>
             <p className="settings-hint">
-              받아서 <b>더블클릭</b> → (실행 때마다 <b>최신 push_agent.py 자동 다운로드</b>) → 허브
-              비밀번호 입력 → 켜두면 내가 <b>생성·재생성·'내 작업 올리기'</b>를 할 때 즉시 작동(이벤트
-              방식, 30초 폴링 없음). 창을 닫으면 멈춥니다.
+              내 PC에 켜두면 내 작업을 허브에 올리고, 허브 생성·재생성을 내 CLI로 실행합니다.
+              더블클릭 → 없으면 <b>Python·Node·CLI 자동 설치 → 로그인 1회 → 작동</b>.{" "}
+              (처음 설치 시 창 닫고 한 번 더 더블클릭)
             </p>
 
             {/* 폴백 — Mac/Linux·고급: 스크립트 직접 받기 + 명령 복사 */}
@@ -197,19 +214,37 @@ export function SettingsPanel({
                 </button>
               </div>
             </details>
-          </section>
 
-          {/* 생성물 전체 가져오기 */}
-          <section className="settings-section">
-            <h4>{t("생성물 전체 가져오기")}</h4>
-            <button className="settings-action" onClick={fullSync} disabled={syncing || !onFullSync}>
-              {syncing ? t("가져오는 중…") : t("↺ 지금 전체 가져오기")}
-            </button>
-            <p className="settings-hint">
-              지금 동기화로 <b>최신 100건</b>을 즉시 가져옵니다(자동 20초 주기와 별개). 힉스필드 CLI
-              한계로 100건 밖 과거 전체는 Claude에게 “전체 가져와줘”라고 하면 MCP(backfill)로 끌어와
-              채웁니다.
-            </p>
+            {/* 생성물 전체 가져오기 — Mac/Linux 직접실행 바로 밑, 같은 접이식 형태(같은 섹션 안). 펼치면 MCP 지시문 복사 + 최신100 동기화. */}
+            <details className="agent-adv import-fold">
+              <summary>{t("생성물 전체 가져오기")}</summary>
+
+              <button className="settings-action" onClick={copyBackfill}>
+                ⬇ History 전체 가져오기 (MCP 지시문 복사)
+              </button>
+              <p className="settings-hint">
+                CLI는 최신 100건까지만 가져옵니다. <b>100건 밖 전체</b>는 MCP로 채웁니다 — 버튼으로 복사한
+                지시문을 <b>힉스필드 MCP가 연결된 Claude 세션</b>에 붙여넣으면 끝까지 올립니다(멱등).
+              </p>
+              <div className="agent-cmd prompt">
+                <code>{backfillPrompt}</code>
+                <button className="agent-copy" onClick={copyBackfill} title="지시문 복사">
+                  {copiedBf ? "✓ 복사됨" : "복사"}
+                </button>
+              </div>
+            </details>
+
+            {/* 최신 100건만 빠른 동기화(CLI) — 위 둘(Mac/Linux·생성물 전체)과 같은 레벨(섹션 직속) */}
+            <details className="agent-adv">
+              <summary>최신 100건 동기화</summary>
+              <button className="settings-action" onClick={fullSync} disabled={syncing || !onFullSync}>
+                {syncing ? t("가져오는 중…") : t("↺ 최신 100건 동기화")}
+              </button>
+              <p className="settings-hint">
+                지금 즉시 <b>최신 100건</b>을 불러옵니다.
+              </p>
+            </details>
+
             {msg && <p className="manage-msg">{msg}</p>}
           </section>
         </div>

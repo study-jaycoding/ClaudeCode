@@ -135,22 +135,85 @@ def run_agent_bat(request: Request):
     acc = _acc(request)
     server = str(request.base_url).rstrip("/")
     email = acc["email"]
-    bat = (
-        "@echo off\r\n"
-        "chcp 65001 >nul\r\n"
-        'cd /d "%~dp0"\r\n'
-        "rem 항상 최신 push_agent.py 를 받는다(임시파일 받아 성공 시 교체) — 코드 갱신 자동 반영.\r\n"
-        "echo push_agent.py 최신본 받는 중...\r\n"
-        f'curl -fsSL -o "%~dp0push_agent.py.new" "{server}/api/agent/download" 2>nul || '
-        f"powershell -NoProfile -Command \"Invoke-WebRequest -Uri '{server}/api/agent/download' -OutFile 'push_agent.py.new'\" 2>nul\r\n"
-        'if exist "%~dp0push_agent.py.new" move /y "%~dp0push_agent.py.new" "%~dp0push_agent.py" >nul\r\n'
-        'if not exist "%~dp0push_agent.py" (echo [오류] push_agent.py 다운로드 실패 - 서버 주소를 확인하세요. & pause & exit /b 1)\r\n'
-        'set "PY=python"\r\n'
-        "where python >nul 2>nul || set \"PY=py\"\r\n"
-        "where %PY% >nul 2>nul || (echo [오류] Python 미설치 - python.org 에서 설치 후 다시 실행하세요. & pause & exit /b 1)\r\n"
-        f"%PY% push_agent.py --server {server} --email {email} --watch 30\r\n"
-        "pause\r\n"
-    )
+    # 자동 설치형 .bat — 없으면 winget(Python·Node)·npm(@higgsfield/cli)로 자동 설치 후 실행.
+    #  · winget/npm 설치분은 현재 콘솔 PATH 에 즉시 안 잡혀(레지스트리에만 반영) → :refreshpath 로
+    #    재읽기(베스트에포트), 그래도 안 잡히면 '새 창에서 다시 실행' 안내로 수렴.
+    #  · higgsfield 는 npm 셰임(.CMD)이라 배치에서 반드시 `call` 로 호출(안 하면 제어 안 돌아옴).
+    #  · `higgsfield auth login` 은 대화형(계정 로그인)이라 자동화 불가 — 처음 1회 사람이 직접.
+    bat = rf"""@echo off
+chcp 65001 >nul
+setlocal
+cd /d "%~dp0"
+
+echo ============================================================
+echo  Content Hub 에이전트 - 자동 설치 + 실행
+echo ============================================================
+
+echo [0/5] push_agent.py 최신본 받는 중...
+curl -fsSL -o "%~dp0push_agent.py.new" "{server}/api/agent/download" 2>nul || powershell -NoProfile -Command "Invoke-WebRequest -Uri '{server}/api/agent/download' -OutFile 'push_agent.py.new'" 2>nul
+if exist "%~dp0push_agent.py.new" move /y "%~dp0push_agent.py.new" "%~dp0push_agent.py" >nul
+if not exist "%~dp0push_agent.py" (echo [오류] push_agent.py 다운로드 실패 - 서버 주소를 확인하세요. & pause & exit /b 1)
+
+set "NEEDREOPEN=0"
+
+echo [1/5] Python 확인...
+set "PY=python"
+where python >nul 2>nul || set "PY=py"
+where %PY% >nul 2>nul
+if errorlevel 1 (
+  echo     Python 미설치 - winget 으로 설치 시도...
+  where winget >nul 2>nul || (echo [오류] winget 이 없어 자동 설치 불가. https://www.python.org 에서 Python 설치 후 다시 실행하세요. & pause & exit /b 1)
+  winget install -e --id Python.Python.3.12 --accept-source-agreements --accept-package-agreements --silent
+  set "NEEDREOPEN=1"
+)
+
+echo [2/5] Node.js(npm) 확인...
+where npm >nul 2>nul
+if errorlevel 1 (
+  echo     Node.js 미설치 - winget 으로 설치 시도...
+  where winget >nul 2>nul || (echo [오류] winget 이 없어 자동 설치 불가. https://nodejs.org 에서 설치 후 다시 실행하세요. & pause & exit /b 1)
+  winget install -e --id OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements --silent
+  set "NEEDREOPEN=1"
+)
+
+if "%NEEDREOPEN%"=="1" call :refreshpath
+
+set "PY=python"
+where python >nul 2>nul || set "PY=py"
+where %PY% >nul 2>nul || (echo. & echo [안내] Python 설치는 완료됐지만 현재 창에 PATH 가 반영되지 않았습니다. & echo        이 창을 닫고 run-agent.bat 을 다시 더블클릭하세요. & pause & exit /b 0)
+where npm >nul 2>nul || (echo. & echo [안내] Node.js 설치는 완료됐지만 현재 창에 PATH 가 반영되지 않았습니다. & echo        이 창을 닫고 run-agent.bat 을 다시 더블클릭하세요. & pause & exit /b 0)
+
+echo [3/5] 힉스필드 CLI 확인...
+set "HF=higgsfield"
+where higgsfield >nul 2>nul || set "HF=hf"
+where %HF% >nul 2>nul
+if errorlevel 1 (
+  echo     힉스필드 CLI 미설치 - npm 으로 설치...
+  call npm install -g @higgsfield/cli || (echo [오류] CLI 설치 실패 - 인터넷/npm 권한을 확인하세요. & pause & exit /b 1)
+  call :refreshpath
+  set "HF=higgsfield"
+)
+
+echo [4/5] 힉스필드 로그인 확인...
+call %HF% account status >nul 2>nul
+if errorlevel 1 (
+  echo     로그인이 필요합니다 - 안내에 따라 내 힉스필드 계정으로 로그인하세요.
+  call %HF% auth login
+)
+
+echo [5/5] 에이전트 실행 - 켜두면 작동, 창을 닫으면 멈춥니다.
+%PY% push_agent.py --server {server} --email {email} --watch 30
+pause
+exit /b 0
+
+:refreshpath
+rem winget/npm 설치분 PATH 를 레지스트리(시스템+사용자)에서 다시 읽어 현재 세션에 반영(베스트에포트).
+for /f "skip=2 tokens=2,*" %%a in ('reg query "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /v Path 2^>nul') do set "SysPath=%%b"
+for /f "skip=2 tokens=2,*" %%a in ('reg query "HKCU\Environment" /v Path 2^>nul') do set "UsrPath=%%b"
+set "PATH=%SysPath%;%UsrPath%"
+goto :eof
+"""
+    bat = bat.replace("\n", "\r\n")
     return Response(
         content=bat.encode("utf-8"),
         media_type="application/octet-stream",
