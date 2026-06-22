@@ -197,7 +197,7 @@ export function SettingsPanel({
             </a>
             <p className="settings-hint">
               내 PC에 켜두면 내 작업을 허브에 올리고, 허브 생성·재생성을 내 CLI로 실행합니다.
-              더블클릭 → 없으면 <b>Python·Node·CLI 자동 설치 → 로그인 1회 → 작동</b>.{" "}
+              더블클릭 → 없으면 <b>Python·Node·CLI 자동 설치 → 로그인 1회 → 허브 자동 열림 + 작동</b>.{" "}
               (처음 설치 시 창 닫고 한 번 더 더블클릭)
             </p>
 

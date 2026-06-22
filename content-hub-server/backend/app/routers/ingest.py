@@ -201,7 +201,9 @@ if errorlevel 1 (
   call %HF% auth login
 )
 
-echo [5/5] 에이전트 실행 - 켜두면 작동, 창을 닫으면 멈춥니다.
+echo [5/5] 허브 열기 + 에이전트 실행 - 켜두면 작동, 창을 닫으면 멈춥니다.
+rem 기본 브라우저로 허브(우리 프로그램) 자동 열기. 그 뒤 에이전트는 이 창에서 상주.
+start "" "{server}"
 %PY% push_agent.py --server {server} --email {email} --watch 30
 pause
 exit /b 0
