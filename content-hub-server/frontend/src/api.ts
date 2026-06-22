@@ -260,6 +260,12 @@ export const api = {
   // "내 작업 올리기" — 내 에이전트를 깨워 로컬 결과물을 즉시 push
   agentSync: () =>
     jsonFetch<{ ok: boolean; connected: boolean }>("/api/agent/sync", { method: "POST" }),
+  // 과거 백필 — MCP show_generations 원시 아이템 배열을 웹 세션으로 직접 적재(파일 업로드 경로). 멱등.
+  ingestMcp: (items: unknown[]) =>
+    jsonFetch<{ inserted: number; updated: number; unchanged: number; skipped: number; linked_uid: string | null }>(
+      "/api/ingest/mcp",
+      { method: "POST", body: JSON.stringify({ items }) },
+    ),
 
   // ── 인증/계정(보안) — 로드맵 §4-1/§4-2 ────────────────────────────────
   authConfig: () =>
