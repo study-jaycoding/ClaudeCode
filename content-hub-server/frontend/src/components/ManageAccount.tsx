@@ -158,7 +158,7 @@ export function ManageAccount({
               </button>
             </div>
             <p className="manage-hint">
-              이 비밀번호는 허브 로그인과 에이전트(run-agent.bat) 실행에 함께 쓰입니다.
+              이 비밀번호는 허브 로그인과 에이전트(MV_agent.bat) 실행에 함께 쓰입니다.
             </p>
             {pwMsg && <p className="manage-msg">{pwMsg}</p>}
           </section>

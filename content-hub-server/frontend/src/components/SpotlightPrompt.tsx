@@ -554,7 +554,7 @@ export function SpotlightPrompt({ onCreated, armedAutoTags, topSlot, activeProje
   };
 
   return (
-    <div className="sl-dockbar">
+    <div className={"sl-dockbar" + (agentOn === false ? " sl-offline" : "")}>
       <div className="sl-dock">
         {topSlot}
         <div className="sl-panel" onDragOver={onPanelDragOver} onDrop={onPanelDrop}>
@@ -1007,7 +1007,7 @@ export function SpotlightPrompt({ onCreated, armedAutoTags, topSlot, activeProje
         <button
           type="button"
           className="sl-status"
-          title="생성·재생성은 내 PC의 에이전트가 켜져 있어야 실행됩니다(run-agent.bat). 클릭=크레딧 확인"
+          title="생성·재생성은 내 PC의 에이전트가 켜져 있어야 실행됩니다(MV_agent.bat). 클릭=크레딧 확인"
           onClick={checkAccount}
         >
           <span className={"sl-status-dot" + (agentOn ? " on" : "")} />

@@ -119,7 +119,7 @@ def team_credits(request: Request):
 
 @router.get("/agent/download")
 def download_agent():
-    """push_agent.py 다운로드 — 공개(미들웨어 _AUTH_PUBLIC_PREFIXES). run-agent.bat 이 인증 없이
+    """push_agent.py 다운로드 — 공개(미들웨어 _AUTH_PUBLIC_PREFIXES). MV_agent.bat 이 인증 없이
     curl 로 받게 한다. 스크립트엔 비밀이 없다(실제 push 는 여전히 허브 로그인 필요)."""
     if not _AGENT_PATH.is_file():
         raise HTTPException(status_code=404, detail="push_agent.py 를 찾을 수 없습니다")
@@ -130,7 +130,7 @@ def download_agent():
 
 @router.get("/agent/run-bat")
 def run_agent_bat(request: Request):
-    """원클릭 실행용 run-agent.bat — 서버 주소·로그인 이메일을 채워 반환. 더블클릭하면
+    """원클릭 실행용 MV_agent.bat — 서버 주소·로그인 이메일을 채워 반환. 더블클릭하면
     push_agent.py 를 자동으로 받아(curl) 상시(--watch) 실행한다. 로그인 필수(이메일 필요)."""
     acc = _acc(request)
     server = str(request.base_url).rstrip("/")
@@ -180,8 +180,8 @@ if "%NEEDREOPEN%"=="1" call :refreshpath
 
 set "PY=python"
 where python >nul 2>nul || set "PY=py"
-where %PY% >nul 2>nul || (echo. & echo [안내] Python 설치는 완료됐지만 현재 창에 PATH 가 반영되지 않았습니다. & echo        이 창을 닫고 run-agent.bat 을 다시 더블클릭하세요. & pause & exit /b 0)
-where npm >nul 2>nul || (echo. & echo [안내] Node.js 설치는 완료됐지만 현재 창에 PATH 가 반영되지 않았습니다. & echo        이 창을 닫고 run-agent.bat 을 다시 더블클릭하세요. & pause & exit /b 0)
+where %PY% >nul 2>nul || (echo. & echo [안내] Python 설치는 완료됐지만 현재 창에 PATH 가 반영되지 않았습니다. & echo        이 창을 닫고 MV_agent.bat 을 다시 더블클릭하세요. & pause & exit /b 0)
+where npm >nul 2>nul || (echo. & echo [안내] Node.js 설치는 완료됐지만 현재 창에 PATH 가 반영되지 않았습니다. & echo        이 창을 닫고 MV_agent.bat 을 다시 더블클릭하세요. & pause & exit /b 0)
 
 echo [3/5] 힉스필드 CLI 확인...
 set "HF=higgsfield"
@@ -219,7 +219,7 @@ goto :eof
     return Response(
         content=bat.encode("utf-8"),
         media_type="application/octet-stream",
-        headers={"Content-Disposition": 'attachment; filename="run-agent.bat"'},
+        headers={"Content-Disposition": 'attachment; filename="MV_agent.bat"'},
     )
 
 

@@ -192,8 +192,8 @@ export function SettingsPanel({
           {/* 내 힉스필드 연결 — 단축키 아래, 전체 가져오기 위 */}
           <section className="settings-section">
             <h4>{t("내 힉스필드 연결 (에이전트)")}</h4>
-            <a className="settings-action" href="/api/agent/run-bat" download="run-agent.bat">
-              ⬇ run-agent.bat 받기 (Windows · 원클릭)
+            <a className="settings-action" href="/api/agent/run-bat" download="MV_agent.bat">
+              ⬇ MV_agent.bat 받기 (Windows · 원클릭)
             </a>
             <p className="settings-hint">
               내 PC에 켜두면 내 작업을 허브에 올리고, 허브 생성·재생성을 내 CLI로 실행합니다.

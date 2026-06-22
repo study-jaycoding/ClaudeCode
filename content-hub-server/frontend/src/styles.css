@@ -1583,6 +1583,14 @@ select optgroup {
   border-radius: 18px;
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.65), var(--glow);
   padding: 6px;
+  transition: filter 0.2s ease, opacity 0.2s ease;
+}
+/* 에이전트 미연결(agentOn=false) — 프롬프트 바를 회색 처리해 '연결 안 됨'을 즉시 인지.
+   연결되면(또는 확인 전 null) 원래 라임 컬러로 복귀. 입력은 가능하게 유지(비활성 아님). */
+.sl-dockbar.sl-offline .sl-panel {
+  filter: grayscale(1);
+  opacity: 0.78;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(160, 160, 160, 0.35);
 }
 
 /* @/# 소스 피커 드롭다운 (프롬프트 위로 띄움) */
