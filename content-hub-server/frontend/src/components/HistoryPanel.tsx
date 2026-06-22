@@ -5,6 +5,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { thumbOf } from "../lib/media";
+import { matchShortcut } from "../lib/shortcuts";
 import { HistoryMiniTree } from "./HistoryMiniTree";
 import { MediaThumbnail } from "./MediaThumbnail";
 import type { Generation, History, HistoryGraph, InfoTarget, PreviewTarget } from "../types";
@@ -140,6 +141,27 @@ export function HistoryPanel({
   const { ancestors, target, children } = lin;
 
   const directParent = ancestors[0]; // 해제 가능한 직계 파생 부모(있으면)
+
+  // 패널 단축키: Esc = 닫기 · h(=히스토리 보기 단축키) 한 번 더 = '구성에서 보기'(보드 진입).
+  // 캡처 단계 + stopPropagation 으로 그리드의 h·전역 Esc 가 함께 발동하지 않게 먼저 가로챈다.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onClose();
+        return;
+      }
+      if (matchShortcut(e, "showHistory")) {
+        e.preventDefault();
+        e.stopPropagation();
+        onOpenInBoard?.(target); // 현재 카드로 구성에서 보기
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onClose, onOpenInBoard, target]);
 
   useEffect(() => {
     let alive = true;

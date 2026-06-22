@@ -87,7 +87,7 @@ export function numericRange(
 // 현재 옵션값에서 활성화된 제약 → { param: { allow:Set<string>, note } }. 동일 param 은 교집합.
 export function activeConstraints(
   model: string,
-  optionValues: Record<string, string | number>,
+  optionValues: Record<string, string | number | boolean>,
 ): Record<string, { allow: Set<string>; note: string }> {
   const out: Record<string, { allow: Set<string>; note: string }> = {};
   for (const c of MODEL_CONSTRAINTS[model] || []) {
@@ -108,11 +108,11 @@ export function useModels(onError: (msg: string) => void) {
   const [type, setType] = useState<"image" | "video">("image");
   const [model, setModel] = useState("");
   const [params, setParams] = useState<ModelParam[]>([]);
-  const [optionValues, setOptionValues] = useState<Record<string, string | number>>({});
+  const [optionValues, setOptionValues] = useState<Record<string, string | number | boolean>>({});
   const [cost, setCost] = useState<number | null>(null);
   const [costLoading, setCostLoading] = useState(false);
   // 카드 드롭 복원 시: 모델 변경 effect 가 기본값으로 옵션을 덮어쓰기 전, 복원할 옵션을 임시 보관.
-  const pendingOptsRef = useRef<Record<string, string | number> | null>(null);
+  const pendingOptsRef = useRef<Record<string, string | number | boolean> | null>(null);
   // 모델별 파라미터 캐시 — 이미지/비디오 토글 시 재요청(네트워크) 없이 즉시 전환.
   const paramsCacheRef = useRef<Record<string, ModelParamsOut>>({});
   // 드롭다운 닫기 브리지 — open/setOpen 은 컴포넌트 UI 상태로 남으므로,
@@ -150,7 +150,7 @@ export function useModels(onError: (msg: string) => void) {
     // 파라미터 → params + 기본값 옵션 적용. 드롭 복원이 대기 중이면 기본값 위에 덮음.
     const apply = (r: ModelParamsOut) => {
       setParams(r.params);
-      const init: Record<string, string | number> = {};
+      const init: Record<string, string | number | boolean> = {};
       for (const p of r.params) {
         if (HIDDEN_PARAMS.has(p.name)) continue;
         const dv = effectiveDefault(p); // 오버라이드(bitrate=high 등) 반영
@@ -227,7 +227,7 @@ export function useModels(onError: (msg: string) => void) {
   //  예) resolution=1080p 인데 mode 를 fast 로 바꾸면 → 720p 로 자동 하향(헛 생성·오해 방지).
   //  멱등(보정 후엔 유효 → 재실행해도 변화 없음)이라 루프 없음.
   useEffect(() => {
-    let next: Record<string, string | number> | null = null;
+    let next: Record<string, string | number | boolean> | null = null;
     // ① enum 조합 제약 → 금지값이면 허용값으로 스냅
     for (const [pname, c] of Object.entries(constraints)) {
       const cur = String(optionValues[pname] ?? "");

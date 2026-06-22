@@ -319,9 +319,12 @@ export function SpotlightPrompt({ onCreated, armedAutoTags, topSlot, activeProje
       // 원래 모델이 화이트리스트에 있으면 유지, 아니면 타입 기본(첫째)로 클램프
       const useModel = ALLOWED[t].includes(g.model || "") ? (g.model as string) : ALLOWED[t][0];
       // 표시 옵션만 추려 임시 보관(프롬프트·미디어 등 내부 파라미터 제외).
-      const opts: Record<string, string | number> = {};
+      const opts: Record<string, string | number | boolean> = {};
       for (const [k, v] of Object.entries(g.params || {})) {
-        if (!HIDDEN_PARAMS.has(k) && (typeof v === "string" || typeof v === "number")) {
+        if (
+          !HIDDEN_PARAMS.has(k) &&
+          (typeof v === "string" || typeof v === "number" || typeof v === "boolean")
+        ) {
           opts[k] = v;
         }
       }
@@ -880,6 +883,35 @@ export function SpotlightPrompt({ onCreated, armedAutoTags, topSlot, activeProje
                                     );
                                   })}
                                 </div>
+                              ) : p.type === "boolean" || typeof p.default === "boolean" ? (
+                                // 불리언(예: generate_audio) — true/false 직접 입력 대신 ON/OFF 토글.
+                                // 값은 불리언으로 저장(백엔드 직렬화·DB 형식과 동일).
+                                (() => {
+                                  const on =
+                                    cur === true || String(cur).toLowerCase() === "true";
+                                  return (
+                                    <div className="sl-adv-opts">
+                                      <button
+                                        className={"sl-adv-opt" + (on ? " sel" : "")}
+                                        onClick={() =>
+                                          setOptionValues((prev) => ({ ...prev, [p.name]: true }))
+                                        }
+                                        title="켜기"
+                                      >
+                                        ON
+                                      </button>
+                                      <button
+                                        className={"sl-adv-opt" + (!on ? " sel" : "")}
+                                        onClick={() =>
+                                          setOptionValues((prev) => ({ ...prev, [p.name]: false }))
+                                        }
+                                        title="끄기"
+                                      >
+                                        OFF
+                                      </button>
+                                    </div>
+                                  );
+                                })()
                               ) : p.type === "integer" ? (
                                 (() => {
                                   const rg = numericRange(model, p.name);
